@@ -1,0 +1,99 @@
+DeepSeek deepseek-flash is multimodal — it correctly identified a red test image (CONTENT: 'Red'). That resolves a core design question. Here's the plan.
+
+What's in ProLight-agent today
+APP_SPECS_OUTLINES.txt — your requirements (GUI perception, mouse/keyboard, app switching, learning DBs, user-action tracking, heartbeat).
+reference_sources/agent.py + context_manager.py — byte-identical to iNysha's (SHA256 match). Direct reuse confirmed.
+reference_sources/UniClicker_sample_source/ — Lazarus/Delphi reference for global input capture (RawInput + WM_INPUT), a script engine (_key/_type/_wait/_lmb/_look/_set/_test), and window-title gating.
+Reuse strategy
+File	Action
+agent.py, context_manager.py	Copy verbatim (they self-locate data/ and system_prompts/ relative to their own path)
+tool_registry.py	Copy verbatim (it hardcodes the builtin_tools package name — keep that name)
+app.py, main.py, builtin_tools/, components/, lib/	Adapt / new
+Vision	DeepSeek deepseek-flash multimodal confirmed working — can drop iNysha's Qwen VL dependency
+agent.py's main loop is text-only and context_manager stores text, so screenshots should flow through a vision_analyze tool that makes its own multimodal call — this keeps agent.py untouched, exactly as you asked.
+
+Proposed layout
+ProLight-agent/
+├─ main.py / app.py            # asyncio orchestrator: queue, worker, console loop, heartbeat
+├─ agent.py / context_manager.py / tool_registry.py   # copied
+├─ system_prompts/ core.md, desktop.md, tools_guidelines.md, learning.md
+├─ builtin_tools/ __init__.py, win_tools.py, capture_tools.py, mouse_tools.py,
+│                 keybd_tools.py, app_tools.py, vision_tools.py,
+│                 learning_tools.py, meta_tools.py
+├─ components/ cmd_line.py, tracker.py (input recording), heartbeat.py
+├─ lib/ winapi.py, input_backend.py, ui_tree.py, vision_client.py
+├─ interaction_guides/<app>.md      # learned per-app facts
+├─ workflows/<task>.md              # learned task workflows
+└─ data/                            # context logs, screenshots, emergency saves
+Tool catalog (refined)
+Your list is solid. Adjustments based on Windows API realities:
+
+Window/UI: win_list_hwnd, win_get_info, win_focus, win_get_control_rects, win_enum_controls (UI Automation tree — names/roles/values, far better than blind rects), win_get_image (via PrintWindow(PW_RENDERFULLCONTENT)), win_get_screenshot (mss), win_send_message, win_wait_for (title/control appears).
+Mouse: mouse_moveto (eased), mouse_click (L/R/double), mouse_down/up, mouse_wheel, mouse_drag, mouse_get_pos.
+Keyboard: keybd_type, keybd_stroke, keybd_hotkey (replaces your hold/release for combos), keybd_down/up, clipboard_get/set.
+App: app_launch, app_list, app_activate, app_close.
+Learning: load/save_interaction_guide, load/save_workflow, list_guides, list_workflows, start/stop_learning_session, note_fact.
+Vision: vision_analyze, analyze_dynamic_scene.
+Answers to your two inline questions
+"Do all mouse tools use WM_ messages? Is that enough?" — No, and no. PostMessage(WM_LBUTTONDOWN/UP) works for standard Win32 controls and can target a background window without stealing focus, but browsers/Electron/1C/DirectX/UWP/custom-drawn apps ignore or mishandle synthetic WM_*. The reliable layer is SendInput (system input queue; requires the target to be foreground; visibly moves the cursor as you want). So: UIA for discovery/invocation → SendInput for mouse/keyboard → WM_ as a fallback for standard controls.
+
+keybd_hold/keybd_release for Ctrl+S? — Prefer a single keybd_hotkey("ctrl+s"); it's atomic and less error-prone. Keep keybd_down/up only for genuine holds.
+
+Key risks / constraints (non-admin)
+UIPI: a non-admin process cannot send input to elevated (admin) windows. Any admin-elevated target app is off-limits. Must be documented.
+DPI scaling: call SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2) at startup or GetWindowRect coords won't match SetCursorPos.
+Image cost/latency: downscale + JPEG + crop-to-window; DeepSeek is a reasoning model, so give vision calls a generous max_tokens (reasoning eats the budget — I hit empty content at 50 tokens).
+Cold imports: endpoint protection made import openai take 77s cold / 5s warm — same as iNysha.
+Phased plan
+Phase 0 — Scaffold: copy core files, .venv + requirements.txt, app.py skeleton, logging, console loop. Boot test.
+Phase 1 — Perception: lib/winapi.py (ctypes), DPI awareness, win_list_hwnd, win_focus, win_get_image/win_get_screenshot, vision_analyze. Verify on Notepad.
+Phase 2 — Actuation: mouse + keyboard (SendInput + WM_ fallback), clipboard. Verify typing/clicking round-trip.
+Phase 3 — Control discovery: UIA tree + rects; click-by-control-name.
+Phase 4 — Learning: guides/workflows file DB + prompts; tracker.py (global capture); session → summarized workflow.
+Phase 5 — Heartbeat: periodic self-prompt + stored plan (reuse iNysha's scheduler pattern).
+Phase 6 — Hardening: image optimization, error recovery, multi-monitor.
+
+
+Locked decisions
+Vision: DeepSeek deepseek-flash multimodal (same client/key as reasoning) — no Qwen.
+Automation: pywinauto (UIA primary, Win32 fallback) + pywin32 + ctypes SendInput + pynput.
+Sequence: phased MVP — perception + actuation first.
+UI: console-only.
+Scope: desktop-only core; no HTTP/MAX/TTS/scheduler carried over.
+Final layout & module responsibilities
+ProLight-agent/
+├─ .env                         # DEEPSEEK_API_KEY_MASTERMIND / _HELPER
+├─ requirements.txt
+├─ main.py                      # asyncio entry -> app.start_app()
+├─ app.py                       # queue + worker + console loop + heartbeat + logging
+├─ agent.py                     # copied verbatim
+├─ context_manager.py           # copied verbatim
+├─ tool_registry.py             # copied verbatim
+├─ system_prompts/
+│   ├─ core.md                  # identity, operating principles, safety
+│   ├─ desktop.md               # how to perceive/interact with Windows GUI
+│   ├─ tools_guidelines.md      # tool selection & verification discipline
+│   └─ learning.md              # learning-mode + guide/workflow rules
+├─ lib/
+│   ├─ winapi.py                # ctypes user32/gdi32/kernel32; DPI awareness
+│   ├─ input_backend.py         # SendInput (primary) + PostMessage WM_ (fallback)
+│   ├─ ui_tree.py               # pywinauto UIA tree -> JSON controls
+│   └─ vision_client.py         # deepseek-flash multimodal call (base64 image)
+├─ builtin_tools/
+│   ├─ __init__.py              # register_all()
+│   ├─ win_tools.py             # list/info/focus/rects/enum_controls/send_message/wait_for
+│   ├─ capture_tools.py         # window image (PrintWindow) + screenshot (mss) + vision bridge
+│   ├─ mouse_tools.py           # moveto/click/down/up/wheel/drag/get_pos
+│   ├─ keybd_tools.py           # type/stroke/hotkey/down/up/clipboard
+│   ├─ app_tools.py             # launch/list/activate/close
+│   ├─ learning_tools.py        # guides/workflows CRUD, learning session, note_fact
+│   └─ meta_tools.py            # ping, reload_tools
+├─ components/
+│   ├─ cmd_line.py              # console command loop
+│   ├─ tracker.py               # pynput global capture -> session JSONL
+│   └─ heartbeat.py             # periodic self-prompt + plan file
+├─ interaction_guides/          # <app>.md
+├─ workflows/                   # <task>.md
+└─ data/                        # agent.log, screenshots, emergency_save.json
+Dependencies (requirements.txt)
+Reused: openai, loguru, tiktoken, python-dotenv, httpx, pillow, mss. New: pywin32, pywinauto, comtypes, pynput, pyperclip. Same Python 3.13 + .venv model as iNysha; same endpoint-protection cold-start caveat.

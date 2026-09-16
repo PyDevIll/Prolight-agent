@@ -1,0 +1,12 @@
+openai~=2.46.0
+loguru~=0.7.3
+tiktoken~=0.13.0
+python-dotenv~=1.2.2
+httpx~=0.28.1
+pillow
+mss~=10.2.0
+pywin32
+pywinauto
+comtypes
+pynput
+pyperclip

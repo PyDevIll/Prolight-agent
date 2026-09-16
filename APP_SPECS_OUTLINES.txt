@@ -1,0 +1,46 @@
+An AI-agent app "ProLight-agent" with tools for executing working tasks on Windows desktop (no admin rights). 
+Sibling reference project is iNysha (C:\Users\PC-3111\Documents\Dev\iNysha).
+
+## ABILITY REQUIREMENTS:
+- Should be able to read and interact with Graphical User Interface of opened windows.
+- Move and click mouse, verify the result of performed click. Type text, check what's typed.
+- Launch nessessary apps, switch between launched apps.
+
+
+### SUPER OPTIMISTIC DREAMS:
+- Learn about each app interaction details and specifics. (file database of learned facts about each app, like "interaction_guides/outlook.md")
+- Learn about workflows: what apps to use and when. e.g. a logistics-manager (Логист) has several workflows during the day, like *checking emails from sales managers* ("Запроси счет у поставщика на артикулы <...>", processing their requests (Создаем заказ поставщику в 1С с указанием поставщика), redirecting them to product-provider by email (направляем запрос поставщикам со списком артикулов); checking product-provider's replies and processing incoming invoices from them (Поставщик присылает счет на артикулы в ответ -> заполняем Заказ Поставщику в 1С ценами из счета). Чтобы точно понять какие приложения использовать и когда, агент понимает *задачу* (чем должен заняться) (switch to specific workflow) и подгружает в конекст выученный workflow. Workflows are stored in file database for each learned workflow like "workflows/request_and_process_invoice.md" ("workflows/<*задача*>.md"). Подразумевается режим обучения для записи новых workflows для новых *задач*.
+
+- Feel free to ask help and explaining about user tasks. Track user actions to be able to learn and correct workflows.
+
+- Have the "Heartbeat" mechanism and plan its actions for himself for future heartbeat cycles.
+
+ 
+
+## TOOLS:
+- `win_list_hwnd`: list all the windows of running apps. Acquires its HWND for sending WM_.. messages to them in future. (low-level)
+- `win_send_message`: sends WM_.. message to specified HWND. (low-level)
+- `win_get_image`: acquires an image of active window (BitBlt(GetDC(HWND)) or similar) to pass it to LLM visual analyzing API. (deepseek-flash now should have it). Hope LLM would be able to recognize the window's GUI, and to read it's meaning.
+- `win_get_control_rects`: acquires all the rects of active window's controls in order to help LLM know where a mouse should be placed and perform clicks in proper coordinates.
+- `win_get_screenshot`: passes to LLM image analyzing API the screenshot of the whole screen.
+- `win_focus`: Brings to front and focuses a HWND of a window or visual control in a window. (or use `mouse_click` to be explicit for user?)
+- `mouse_moveto`: Moves mouse pointer naturally to specified coordinates so user could track what does the agent do and where.
+- `mouse_click`: Performs LMB or RMB click at mouse pointer position.
+- `mouse_hold`: Presses and holds LMB or RMB. (mose_hold + mouse_move to drag things?)
+- `mouse_release`: Releases held mouse buttons.
+- `mouse_wheel`: Rolls mouse wheel up or down.
+(all mouse_ tools use WM_ message sending mechanism? Is it enough?)
+- `keybd_type`: Types text into active edit control of an active window.
+- `keybd_stroke`: Sends a single key stroke to an active window or active visual control.
+- `keybd_hold`: Presses and keeps a key pressed. 
+- `keybd_release`: Release held keyboard buttons.
+(`keybd_hold` and `keybd_release` are for typing key combinations like Ctrl+S (is this the best way?) or could be useful for other things)
+( or `keybd_send` to send keyboard events at a single call in whatever string format? if convenient..)
+
+
+Think of better toolset and its purpose as expert in Windows API, to help the agent work with Windows GUI smoothly
+
+## NOTES:
+We should take into consideration deepseek's ability to process messages, image processing requirements and restrictions and, probably optimization of image analyzing (compression, scaling (will x0.5 work well?)
+
+Agent should ask questions about tasks or apps and keep track of user actions to learn things or to get answer for its questions.
