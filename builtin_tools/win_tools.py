@@ -12,6 +12,7 @@ from typing import Optional
 from loguru import logger
 
 from lib import winapi
+from lib import input_backend as ib
 
 
 def _dump(obj) -> str:
@@ -81,6 +82,59 @@ async def win_focus(hwnd: int) -> str:
     return _dump(result)
 
 
+async def win_get_menu_rects(hwnd: int) -> str:
+    """List a window's menu-bar items (text + screen rectangle).
+
+    Menu bars are non-client area, so these coordinates are NOT inside the
+    client rect returned by other tools. Use center_x/center_y with mouse_click
+    to open a menu. (To find items inside an opened dropdown, use win_see.)
+    """
+    hwnd = int(hwnd)
+    if not winapi.is_window(hwnd):
+        return _dump({"ok": False, "error": f"Invalid window handle: {hwnd}"})
+    items = winapi.get_menu_items(hwnd)
+    logger.debug(f"win_get_menu_rects({hwnd}): {len(items)} items")
+    return _dump({"ok": True, "count": len(items), "items": items})
+
+
+async def win_send_message(
+    hwnd: int,
+    kind: str,
+    x: int = 0,
+    y: int = 0,
+    button: str = "left",
+    key: str = "",
+    char: str = "",
+) -> str:
+    """Send a synthetic WM_ message to a window (low-level fallback).
+
+    This does NOT move the real cursor or change focus, and works only for
+    standard Win32 controls. Many apps (browsers, Electron, 1C, custom-drawn)
+    ignore synthetic messages — prefer mouse_*/keybd_* tools for those.
+
+    Args:
+        hwnd: target window (or child control) handle.
+        kind: "click" (uses x,y,button, CLIENT coords) | "key" (uses key) | "char" (uses char).
+    """
+    hwnd = int(hwnd)
+    if not winapi.is_window(hwnd):
+        return _dump({"ok": False, "error": f"Invalid window handle: {hwnd}"})
+    try:
+        if kind == "click":
+            ib.wm_click(hwnd, x, y, button)
+        elif kind == "key":
+            ib.wm_key(hwnd, key)
+        elif kind == "char":
+            ib.wm_char(hwnd, char)
+        else:
+            return _dump({"ok": False, "error": f"Unknown kind {kind!r} (use click/key/char)"})
+    except Exception as e:
+        logger.error(f"win_send_message failed: {e}")
+        return _dump({"ok": False, "error": str(e)})
+    logger.debug(f"win_send_message kind={kind} hwnd={hwnd}")
+    return _dump({"ok": True, "kind": kind, "hwnd": hwnd})
+
+
 TOOL_DEFINITIONS = [
     (
         "win_list_hwnd",
@@ -121,6 +175,38 @@ TOOL_DEFINITIONS = [
                 "hwnd": {"type": "integer", "description": "Window handle to focus"},
             },
             "required": ["hwnd"],
+        },
+    ),
+    (
+        "win_get_menu_rects",
+        win_get_menu_rects,
+        "List a window's menu-bar items (text + screen rect). Use center_x/center_y "
+        "with mouse_click to open a menu.",
+        {
+            "type": "object",
+            "properties": {
+                "hwnd": {"type": "integer", "description": "Window handle"},
+            },
+            "required": ["hwnd"],
+        },
+    ),
+    (
+        "win_send_message",
+        win_send_message,
+        "Send a synthetic WM_ message to a window (low-level fallback; no cursor "
+        "move, no focus change; standard controls only). Prefer mouse_*/keybd_*.",
+        {
+            "type": "object",
+            "properties": {
+                "hwnd": {"type": "integer", "description": "Target window/control handle"},
+                "kind": {"type": "string", "description": "click | key | char"},
+                "x": {"type": "integer", "description": "Client X for kind=click"},
+                "y": {"type": "integer", "description": "Client Y for kind=click"},
+                "button": {"type": "string", "description": "left | right | middle (kind=click)"},
+                "key": {"type": "string", "description": "Key name (kind=key)"},
+                "char": {"type": "string", "description": "Character (kind=char)"},
+            },
+            "required": ["hwnd", "kind"],
         },
     ),
 ]

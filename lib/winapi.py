@@ -38,6 +38,8 @@ BI_RGB = 0
 
 DWMWA_CLOAKED = 14
 
+MF_BYPOSITION = 0x00000400
+
 
 # ── Structs ───────────────────────────────────────────────────────────────
 class RECT(ctypes.Structure):
@@ -102,6 +104,18 @@ user32.AllowSetForegroundWindow.restype = wintypes.BOOL
 
 user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
 user32.GetWindowRect.restype = wintypes.BOOL
+user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
+user32.GetClientRect.restype = wintypes.BOOL
+user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(POINT)]
+user32.ClientToScreen.restype = wintypes.BOOL
+user32.GetMenu.argtypes = [wintypes.HWND]
+user32.GetMenu.restype = wintypes.HMENU
+user32.GetMenuItemCount.argtypes = [wintypes.HMENU]
+user32.GetMenuItemCount.restype = ctypes.c_int
+user32.GetMenuItemRect.argtypes = [wintypes.HWND, wintypes.HMENU, wintypes.UINT, ctypes.POINTER(RECT)]
+user32.GetMenuItemRect.restype = wintypes.BOOL
+user32.GetMenuStringW.argtypes = [wintypes.HMENU, wintypes.UINT, wintypes.LPWSTR, ctypes.c_int, wintypes.UINT]
+user32.GetMenuStringW.restype = ctypes.c_int
 
 user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 user32.SetForegroundWindow.restype = wintypes.BOOL
@@ -271,6 +285,73 @@ def get_window_rect(hwnd: int) -> Optional[dict]:
         "width": rect.right - rect.left,
         "height": rect.bottom - rect.top,
     }
+
+
+def get_client_rect_screen(hwnd: int) -> Optional[dict]:
+    """Client area rectangle in screen coordinates (physical pixels)."""
+    rect = RECT()
+    if not user32.GetClientRect(hwnd, ctypes.byref(rect)):
+        return None
+    origin = POINT(0, 0)
+    if not user32.ClientToScreen(hwnd, ctypes.byref(origin)):
+        return None
+    return {
+        "left": origin.x,
+        "top": origin.y,
+        "right": origin.x + rect.right,
+        "bottom": origin.y + rect.bottom,
+        "width": rect.right,
+        "height": rect.bottom,
+    }
+
+
+def get_menu_item_rect(hwnd: int, index: int = 0) -> Optional[dict]:
+    """Screen-coordinate rect of a menu-bar item (index 0 = first item).
+
+    Returns None if the window has no menu or the index is invalid.
+    """
+    hmenu = user32.GetMenu(hwnd)
+    if not hmenu:
+        return None
+    count = user32.GetMenuItemCount(hmenu)
+    if count <= 0 or index < 0 or index >= count:
+        return None
+    rect = RECT()
+    if not user32.GetMenuItemRect(hwnd, hmenu, index, ctypes.byref(rect)):
+        return None
+    return {
+        "left": rect.left,
+        "top": rect.top,
+        "right": rect.right,
+        "bottom": rect.bottom,
+        "width": rect.right - rect.left,
+        "height": rect.bottom - rect.top,
+        "center_x": (rect.left + rect.right) // 2,
+        "center_y": (rect.top + rect.bottom) // 2,
+        "count": count,
+    }
+
+
+def get_menu_items(hwnd: int) -> list[dict]:
+    """List the window's menu-bar items with their text and screen rects.
+
+    Note: the menu bar is NON-client area, so its coordinates lie above
+    ``get_client_rect_screen()``. Use these rects to click menu items.
+    """
+    hmenu = user32.GetMenu(hwnd)
+    if not hmenu:
+        return []
+    count = user32.GetMenuItemCount(hmenu)
+    items: list[dict] = []
+    for i in range(max(0, count)):
+        buf = ctypes.create_unicode_buffer(256)
+        user32.GetMenuStringW(hmenu, i, buf, 256, MF_BYPOSITION)
+        items.append({
+            "index": i,
+            "text": buf.value.replace("&", ""),
+            "rect": get_menu_item_rect(hwnd, i),
+        })
+    return items
 
 
 def is_cloaked(hwnd: int) -> bool:
