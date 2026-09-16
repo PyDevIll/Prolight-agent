@@ -8,6 +8,7 @@ from loguru import logger
 from agent import Agent
 from builtin_tools import register_all as register_builtin_tools
 from tool_registry import get_registry
+from lib.console import force_utf8_console
 
 # Data directory (screenshots, logs, context saves)
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -65,6 +66,9 @@ async def get_command() -> None:
 
 # --------- APP ENTRY POINT -----------
 async def start_app() -> None:
+    # Ensure UTF-8 before any logging (handles Cyrillic titles/answers).
+    force_utf8_console()
+
     logger.remove()
     logger.add(sys.stderr, level="DEBUG")
     logger.add(
@@ -72,6 +76,7 @@ async def start_app() -> None:
         rotation="1 MB",
         retention="7 days",
         level="DEBUG",
+        encoding="utf-8",
     )
 
     logger.info("ProLight-agent starting...")
