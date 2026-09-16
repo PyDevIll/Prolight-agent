@@ -89,10 +89,16 @@ user32.IsIconic.restype = wintypes.BOOL
 user32.IsZoomed.argtypes = [wintypes.HWND]
 user32.IsZoomed.restype = wintypes.BOOL
 
+user32.GetForegroundWindow.argtypes = []
 user32.GetForegroundWindow.restype = wintypes.HWND
 
 user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+
+user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+user32.AttachThreadInput.restype = wintypes.BOOL
+user32.AllowSetForegroundWindow.argtypes = [wintypes.DWORD]
+user32.AllowSetForegroundWindow.restype = wintypes.BOOL
 
 user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
 user32.GetWindowRect.restype = wintypes.BOOL
@@ -144,6 +150,29 @@ kernel32.QueryFullProcessImageNameW.argtypes = [
 kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
 kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 kernel32.CloseHandle.restype = wintypes.BOOL
+kernel32.GetCurrentThreadId.argtypes = []
+kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
+# DPI-awareness APIs
+user32.SetProcessDpiAwarenessContext.argtypes = [wintypes.HANDLE]  # DPI_AWARENESS_CONTEXT
+user32.SetProcessDpiAwarenessContext.restype = wintypes.BOOL
+user32.SetProcessDPIAware.argtypes = []
+user32.SetProcessDPIAware.restype = wintypes.BOOL
+
+# dwmapi
+if dwmapi is not None:
+    dwmapi.DwmGetWindowAttribute.argtypes = [
+        wintypes.HWND, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
+    ]
+    dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long  # HRESULT
+
+# shcore (load once; absent before Win8.1)
+try:
+    shcore = ctypes.WinDLL("shcore", use_last_error=True)
+    shcore.SetProcessDpiAwareness.argtypes = [ctypes.c_int]
+    shcore.SetProcessDpiAwareness.restype = ctypes.c_long  # HRESULT
+except OSError:  # pragma: no cover
+    shcore = None
 
 
 # ── DPI awareness ─────────────────────────────────────────────────────────
@@ -171,8 +200,7 @@ def ensure_dpi_awareness() -> bool:
 
     # 2) Per-monitor (Win8.1+): PROCESS_PER_MONITOR_DPI_AWARE = 2
     try:
-        shcore = ctypes.WinDLL("shcore", use_last_error=True)
-        if shcore.SetProcessDpiAwareness(2) == 0:  # S_OK
+        if shcore is not None and shcore.SetProcessDpiAwareness(2) == 0:  # S_OK
             _dpi_aware = True
             return True
     except (AttributeError, OSError):
@@ -315,39 +343,82 @@ def list_windows(visible_only: bool = True, titled_only: bool = True) -> list[di
 
 
 # ── Focus ─────────────────────────────────────────────────────────────────
+def _get_window_thread_id(hwnd: int) -> int:
+    """Thread id that owns a window (0 on failure)."""
+    if not hwnd:
+        return 0
+    return int(user32.GetWindowThreadProcessId(hwnd, None) or 0)
+
+
 def focus_window(hwnd: int) -> dict:
     """Restore (if needed), bring to foreground and focus a window.
 
-    Returns a dict describing the outcome. Windows enforces foreground-lock
-    rules, so success is verified via GetForegroundWindow().
+    Windows enforces foreground-lock rules: a process that is not the active
+    application may be refused permission to change the foreground window.
+    The canonical workaround is to temporarily attach this thread's input
+    queue to the foreground (and target) thread's queue, call
+    SetForegroundWindow, then detach.
+
+    Success is verified via GetForegroundWindow().
     """
+    hwnd = int(hwnd)
     if not is_window(hwnd):
         return {"ok": False, "error": f"Invalid window handle: {hwnd}"}
 
     was_minimized = bool(user32.IsIconic(hwnd))
+
+    # Fast path: already foreground.
+    if get_foreground_window() == hwnd:
+        if was_minimized:
+            user32.ShowWindow(hwnd, SW_RESTORE)
+        user32.SetFocus(hwnd)
+        return {
+            "ok": True,
+            "hwnd": hwnd,
+            "foreground_hwnd": hwnd,
+            "was_minimized": was_minimized,
+            "title": get_window_text(hwnd),
+            "method": "already-foreground",
+        }
+
     if was_minimized:
         user32.ShowWindow(hwnd, SW_RESTORE)
 
-    user32.BringWindowToTop(hwnd)
-    user32.SetForegroundWindow(hwnd)
-    user32.SetActiveWindow(hwnd)
-    user32.SetFocus(hwnd)
+    # Best-effort: allow us to set the foreground window (ASFW_ANY = 0xFFFFFFFF).
+    try:
+        user32.AllowSetForegroundWindow(0xFFFFFFFF)
+    except OSError:
+        pass
+
+    cur_thread = int(kernel32.GetCurrentThreadId())
+    fg_hwnd = get_foreground_window()
+    fg_thread = _get_window_thread_id(fg_hwnd)
+    target_thread = _get_window_thread_id(hwnd)
+
+    attached: list[int] = []
+    for other in (fg_thread, target_thread):
+        if other and other != cur_thread and other not in attached:
+            if user32.AttachThreadInput(cur_thread, other, True):
+                attached.append(other)
+
+    try:
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+        user32.SetActiveWindow(hwnd)
+        user32.SetFocus(hwnd)
+    finally:
+        # Always detach, even if a call above raised.
+        for other in attached:
+            user32.AttachThreadInput(cur_thread, other, False)
 
     fg = get_foreground_window()
-    ok = (fg == int(hwnd))
-    if not ok:
-        # Retry once after a restore/show, common when focus was stolen.
-        user32.ShowWindow(hwnd, SW_SHOW)
-        user32.SetForegroundWindow(hwnd)
-        fg = get_foreground_window()
-        ok = (fg == int(hwnd))
-
     return {
-        "ok": ok,
-        "hwnd": int(hwnd),
+        "ok": fg == hwnd,
+        "hwnd": hwnd,
         "foreground_hwnd": fg,
         "was_minimized": was_minimized,
         "title": get_window_text(hwnd),
+        "method": "attach-thread-input",
     }
 
 
@@ -385,10 +456,12 @@ def capture_window(hwnd: int, client_only: bool = False) -> Optional[dict]:
 
     old_obj = gdi32.SelectObject(hdc_mem, hbmp)
     try:
-        flags = PW_RENDERFULLCONTENT
-        if not user32.PrintWindow(hwnd, hdc_mem, flags):
-            # Fallback to legacy behaviour
-            user32.PrintWindow(hwnd, hdc_mem, 0)
+        # PW_RENDERFULLCONTENT handles occluded/DWM-composited windows.
+        # Fall back to the legacy flag, but fail cleanly if BOTH fail —
+        # otherwise GetDIBits would hand back an uninitialized bitmap.
+        if not user32.PrintWindow(hwnd, hdc_mem, PW_RENDERFULLCONTENT):
+            if not user32.PrintWindow(hwnd, hdc_mem, 0):
+                return None
 
         bmi = BITMAPINFOHEADER()
         bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
@@ -397,6 +470,7 @@ def capture_window(hwnd: int, client_only: bool = False) -> Optional[dict]:
         bmi.biPlanes = 1
         bmi.biBitCount = 32
         bmi.biCompression = BI_RGB
+        bmi.biSizeImage = width * height * 4
 
         buflen = width * height * 4
         buffer = ctypes.create_string_buffer(buflen)
