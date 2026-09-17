@@ -6,7 +6,14 @@
 - **Raw pixels / keep an image** → `win_get_image(hwnd)` then `vision_analyze(path, query)`.
 - **Whole screen** → `win_get_screenshot()`.
 - **Focus** → `win_focus(hwnd)` (restores if minimized). Verify `foreground: true`.
-- **Click a control** → locate its coordinates from an image, then `mouse_click(x, y)`.
+- **List controls** → `win_enum_controls(hwnd)` (tree) or `win_get_control_rects(hwnd)` (flat rects).
+- **Find a control by name** → `win_find_controls(hwnd, name="OK", control_type="Button")`.
+- **Click a control** → `win_click_control(hwnd, name="OK")` (UIA). If UIA finds nothing, locate coordinates from an image and `mouse_click(x, y)`.
+- **Wait for a control** → `win_wait_for(hwnd, name="...")` (dialogs, loading lists).
+- **Set a field directly** → `win_set_control_text(hwnd, text="...", name="...")` (UIA ValuePattern, no typing).
+- **Verify a control's state** → `vision_look(hwnd=..., control_type="CheckBox", query="Is it ticked?", label="cb1")`.
+- **Verify a change** → `vision_changed("cb1")` (cheap, no vision call), then `vision_compare("cb1")` if it changed.
+- **Look at a region** → `vision_look(rect=[left,top,right,bottom], query="...", label="...")` (crop tightly; use `scale` to zoom).
 - **Enter text** → `win_focus` the window/edit, then `keybd_type(text)`.
 - **Shortcuts** → `keybd_hotkey("ctrl+s")`.
 - **Exact/long values** → `clipboard_set(text)` then `keybd_hotkey("ctrl+v")`.
@@ -15,7 +22,7 @@
 
 ### Discipline
 - `win_focus` before any mouse/keyboard action; verify it took effect.
-- After each action, verify with a fresh capture. Do not chain many blind actions.
+- After each action, verify: `vision_changed(label)` first (cheap), then `vision_compare(label)` to describe the change. Do not chain many blind actions.
 - If a tool returns an error or empty result, read it and adjust; do not repeat the identical call more than twice.
 - Never perform destructive or irreversible actions (delete, send, purchase, submit) without explicit confirmation.
 

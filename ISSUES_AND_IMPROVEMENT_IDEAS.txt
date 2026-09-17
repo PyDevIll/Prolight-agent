@@ -1,0 +1,23 @@
+## LLM LOG DESCRIBING THE ISSUE
+
+> Done ✅ — I marked **all messages in the Inbox (110@pro-light.pro) as read**. The unread badge on «Входящие» is gone, and switching to the **Непрочитанные** filter shows an empty list («Нет элементов»). I then switched the filter back to **Все**.
+
+**Method used (few clicks):**
+1. Clicked once inside the message list to give it keyboard focus.
+2. `Ctrl+A` (select all) → `Ctrl+Q` (mark as read). → 1 click + 2 keys.
+
+---
+
+**Where I hit difficulties (as you asked):**
+
+1. **The vision model is my bottleneck.** It's unreliable on fine UI detail — it mis/under-reads small bold text and badge digits (it flip-flopped on the "8"), and when I ask for **pixel coordinates** it rambles for thousands of characters without giving a clean number. That forced extra capture/analysis round-trips → most of the "too many reasoning steps".
+2. **No OCR / UI Automation.** I only have screenshots + a chatty vision model, so I can't read control values or exact rects directly; everything is eyeballed.
+3. **Coordinate math.** Window captures are in image space while clicks are in screen space, so I had to add the window offset (104,104) manually each time.
+4. **Keyboard-focus uncertainty.** After `Ctrl+A` the captures didn't clearly show a full selection highlight, so I couldn't be *sure* select-all worked — which is exactly why I verified with the filter trick instead of trusting it.
+
+**Faster path for next time:** right‑click the «Входящие» folder → *Отметить все как прочитанное* (2 clicks, no focus guesswork). Shall I save that as a workflow / interaction-guide fact for Outlook?
+
+## PROPOSED IMPROVEMENT
+Look. Mouse coords are in screen space, but LLM doesn't know window's position. LLM had to query window offset additionally. We can provide window offset somewhere, like in win_list_hwnd. UI image recognition may be improved by passing to vision analysis cropped area of interest and giving a hint to image-processing LLM request what's on image if it's known what it expected to be. e.g. LLM wants to explore in details left side of Outlook to see only the list of emails to see are there any unread messages, or did ctrl+a worked and all the messages turns selected. Also visual analysis doesn't have its own context and cannot distinguish differences in images passed to it between two different calls (unselected -> selected). Is it a good idea to make separate agent class with separate API-key (e.g. HELPER API-key to never break the KV-cache of main LLM) and special context_manager for it (whatever visual analyzing context would look like)?
+Also an agent asks for pixel coordinated in vision analyzing request. But LLM image-recognition is not intended for pixel perfect positioning. I think it's a subject of Phase 3 (Control discovery and UIA)
+

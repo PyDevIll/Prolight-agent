@@ -55,7 +55,9 @@ def _get_client():
     return _client
 
 
-def _load_image(image: Union[str, Path, bytes]) -> Image.Image:
+def _load_image(image: Union[str, Path, bytes, Image.Image]) -> Image.Image:
+    if isinstance(image, Image.Image):
+        return image
     if isinstance(image, (bytes, bytearray)):
         img = Image.open(io.BytesIO(image))
     else:
@@ -98,6 +100,7 @@ async def analyze_image(
     max_tokens: int = 2048,
     max_dim: int = DEFAULT_MAX_DIM,
     quality: int = DEFAULT_QUALITY,
+    client=None,
 ) -> str:
     """Send one image plus a question to the multimodal model.
 
@@ -117,31 +120,50 @@ async def analyze_image(
     data_url, width, height = encode_image(image, max_dim=max_dim, quality=quality)
     logger.debug(f"vision: analyzing image {width}x{height}, query={query[:80]!r}")
 
-    client = _get_client()
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": query},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        }
+    ]
+    return await analyze_messages(messages, max_tokens=max_tokens, client=client)
+
+
+def _extract_content(message) -> str:
+    """Return the assistant text, falling back to reasoning_content if needed."""
+    content = (getattr(message, "content", "") or "").strip()
+    if content:
+        return content
+    reasoning = getattr(message, "reasoning_content", "") or ""
+    if reasoning:
+        # Budget was consumed by reasoning; surface it rather than nothing.
+        logger.warning("vision: empty content, returning reasoning_content")
+        return reasoning.strip()
+    raise RuntimeError("Vision model returned no content")
+
+
+async def analyze_messages(
+    messages: list[dict],
+    max_tokens: int = 2048,
+    temperature: float = 0.2,
+    model: str = VISION_MODEL,
+    client=None,
+) -> str:
+    """Run a multimodal chat completion and return the assistant text.
+
+    Pass ``client`` to use a specific AsyncOpenAI client (e.g. the vision
+    sub-agent's own client/key); otherwise the shared vision client is used.
+    """
+    client = client or _get_client()
     response = await client.chat.completions.create(
-        model=VISION_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": query},
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                ],
-            }
-        ],
+        model=model,
+        messages=messages,
         max_tokens=max_tokens,
-        temperature=0.2,
+        temperature=temperature,
     )
-
-    message = response.choices[0].message
-    content = (message.content or "").strip()
-    if not content:
-        reasoning = getattr(message, "reasoning_content", "") or ""
-        if reasoning:
-            # Budget was consumed by reasoning; surface it rather than nothing.
-            logger.warning("vision: empty content, returning reasoning_content")
-            return reasoning.strip()
-        raise RuntimeError("Vision model returned no content")
-
+    content = _extract_content(response.choices[0].message)
     logger.debug(f"vision: got {len(content)} chars")
     return content

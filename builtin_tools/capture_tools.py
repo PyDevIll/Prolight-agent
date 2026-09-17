@@ -18,7 +18,7 @@ from PIL import Image
 from loguru import logger
 
 from lib import winapi
-from lib.vision_client import analyze_image
+from lib.vision_agent import get_vision_agent
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 SCREENSHOT_DIR = DATA_DIR / "screenshots"
@@ -145,7 +145,7 @@ async def win_see(hwnd: int, query: str, max_dim: int = 1600) -> str:
     png_bytes = buf.getvalue()
 
     try:
-        description = await analyze_image(png_bytes, query, max_dim=max_dim)
+        description = await get_vision_agent().ask_once(png_bytes, query)
     except Exception as e:
         logger.error(f"win_see vision call failed: {e}")
         return _dump({"ok": False, "error": f"Vision analysis failed: {e}"})
