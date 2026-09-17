@@ -12,7 +12,7 @@ from typing import Optional
 from openai import AsyncOpenAI
 from loguru import logger
 
-from context_manager import ContextPool
+from context_manager import ContextPool, count_tokens
 from tool_registry import get_registry
 
 LLM_MAX_OUTPUT_TOKENS = 30000
@@ -93,6 +93,13 @@ class Agent:
         self._save_history = save_history
         self._helper_agent: Optional[Agent] = None
         self.messages = ContextPool()
+
+        # Tell the context manager how large the static prompt is, so its
+        # overflow/compression decision measures the real assembled context.
+        _static = self._system_prompt.get("content", "") or ""
+        for _m in construct_history(self._base_prompts):
+            _static += _m.get("content", "") or ""
+        self.messages.base_prompt_tokens = count_tokens(_static)
 
         # Load last memory into context (from previous compression)
         if self._last_memory:

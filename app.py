@@ -111,9 +111,6 @@ async def start_app() -> None:
             ("\n## **Tools Guidelines & Best Practices**\n", "system_prompts/tools_guidelines.md"),
             ("\n## **Learning**\n", "system_prompts/learning.md"),
         ],
-        last_memory=[
-            ("# **PREVIOUS MEMORY SUMMARY**\n", "data/last_compression.txt"),
-        ],
         use_tools=True,
         save_history=True,
     )
