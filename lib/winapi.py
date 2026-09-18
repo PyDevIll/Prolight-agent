@@ -728,3 +728,19 @@ def get_cursor_pos() -> dict:
 
 def set_cursor_pos(x: int, y: int) -> bool:
     return bool(user32.SetCursorPos(int(x), int(y)))
+
+
+# ── Point hit-test ────────────────────────────────────────────────────────
+def window_from_point(x: int, y: int) -> int:
+    """HWND of the window or child control at screen point (x, y); 0 if none."""
+    user32.WindowFromPoint.restype = wintypes.HWND
+    user32.WindowFromPoint.argtypes = [POINT]
+    return int(user32.WindowFromPoint(POINT(int(x), int(y))) or 0)
+
+
+def get_root_window(hwnd: int) -> int:
+    """Top-level ancestor (GA_ROOT) of a window or child-control handle."""
+    GA_ROOT = 2
+    user32.GetAncestor.restype = wintypes.HWND
+    user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+    return int(user32.GetAncestor(wintypes.HWND(int(hwnd)), GA_ROOT) or int(hwnd))

@@ -281,6 +281,22 @@ def _element_at_point_sync(x, y):
         d = _control_dict(el, 0)
     except Exception as e:
         return {"ok": False, "error": f"element read failed: {e}"}
+    d["point"] = {"x": int(x), "y": int(y)}
+    try:
+        from lib import winapi
+
+        ctrl_hwnd = winapi.window_from_point(int(x), int(y))
+        if ctrl_hwnd:
+            root = winapi.get_root_window(ctrl_hwnd)
+            d["control_hwnd"] = ctrl_hwnd
+            d["window"] = {
+                "hwnd": root,
+                "title": winapi.get_window_text(root),
+                "class": winapi.get_class_name(root),
+                "process": winapi.get_process_name(winapi.get_window_pid(root)),
+            }
+    except Exception:
+        pass
     d["ok"] = True
     return d
 

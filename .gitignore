@@ -5,4 +5,5 @@ __pycache__/
 data/
 reference_sources/
 .idea/
+DEVELOPER_REQUEST.md
 failed_*
