@@ -124,11 +124,13 @@ class VisionAgent:
             base_url=DEEPSEEK_BASE_URL,
             timeout=timeout,
             max_retries=1,
+
         )
         self.watches: dict[str, dict] = {}
         logger.info(f"VisionAgent '{name}' initialized (key={'set' if api_key else 'MISSING'})")
 
     # ── low-level completion ──────────────────────────────────────────────
+
     async def _complete(self, parts, max_tokens: int = 1024) -> str:
         """One-shot completion: only the system prompt and this request's parts."""
         messages = [

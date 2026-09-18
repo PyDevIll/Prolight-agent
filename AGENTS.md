@@ -79,7 +79,13 @@ Windows desktop GUI-automation agent ("ProLight"). Console-only, **non-admin**, 
 
 ## Phase / roadmap
 
+<<<<<<< HEAD
 - Phases 0–3 done (scaffold, perception, actuation, UIA control discovery) plus the vision sub-agent, the perception consolidation (snapshot/diff + OCR locator) and **Phase 4 learning** (`lib/learning_db.py`, `builtin_tools/learning_tools.py`, `components/tracker.py`, `screen_probe`, blocking `ask_user`). Next is Phase 5 (heartbeat).
 - Roadmap: `GENERATED_PLAN.txt` (no `DEVLOG.txt`); requirements: `APP_SPECS_OUTLINES.txt`; real-world friction log: `ISSUES_AND_IMPROVEMENT_IDEAS.txt`.
 - Planned but not yet created: `builtin_tools/app_tools.py` (launch/list/activate/close), `components/heartbeat.py` (Phase 5).
+=======
+- Phases 0–3 done (scaffold, perception, actuation, UIA control discovery) plus the vision sub-agent (region/control change-verification); next is Phase 4 (learning: guides/workflows DB + `components/tracker.py`).
+- Roadmap/requirements: `GENERATED_PLAN.txt`, `APP_SPECS_OUTLINES.txt`; the agent files improvement requests in `DEVELOPER_REQUEST.md` (per `core.md`, newest first) — review it after runs.
+- Planned but not yet created: `builtin_tools/app_tools.py`, `learning_tools.py`, `components/tracker.py`, `heartbeat.py`. `pynput` is in `requirements.txt` but not imported anywhere yet.
+>>>>>>> 978615b... Switched off reasoning for vision_agent. Added instruction about issues reporting in core.md
 - `reference_sources/` (gitignored) holds the verbatim iNysha copies and `UniClicker_sample_source/` (Delphi input-capture reference) — reference only, don't edit.

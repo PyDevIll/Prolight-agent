@@ -163,6 +163,7 @@ async def analyze_messages(
         messages=messages,
         max_tokens=max_tokens,
         temperature=temperature,
+        extra_body={"thinking": {"type": "disabled"}}
     )
     content = _extract_content(response.choices[0].message)
     logger.debug(f"vision: got {len(content)} chars")
