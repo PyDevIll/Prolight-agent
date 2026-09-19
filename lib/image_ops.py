@@ -147,12 +147,6 @@ def save(img: Image.Image, label: str = "crop") -> Path:
     return path
 
 
-def estimate_image_tokens(img: Image.Image) -> int:
-    """Rough token estimate for an image (used only for context accounting)."""
-    w, h = img.size
-    return max(1, (w * h) // 750)
-
-
 def grab_region_with_meta(
     rect: RectLike,
     source: str = "screen",

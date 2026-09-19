@@ -230,6 +230,29 @@ def _set_text_sync(hwnd, name, control_type, automation_id, class_name, text, ma
         return {"ok": False, "error": f"cannot set text: {e}", "control": d}
 
 
+def _element_at_point_sync(x, y):
+    """UIA element under a screen point (for click labelling)."""
+    _ensure_com()
+    el = None
+    for backend in ("uia", "win32"):
+        try:
+            from pywinauto import Desktop
+
+            el = Desktop(backend=backend).from_point(int(x), int(y))
+            if el is not None:
+                break
+        except Exception:
+            el = None
+    if el is None:
+        return {"ok": False, "error": "no element at point"}
+    try:
+        d = _control_dict(el, 0)
+    except Exception as e:
+        return {"ok": False, "error": f"element read failed: {e}"}
+    d["ok"] = True
+    return d
+
+
 # ── async API used by tools ───────────────────────────────────────────────
 async def enum_controls(
     hwnd: int,
@@ -242,6 +265,19 @@ async def enum_controls(
     return await _run(
         _enum_sync, int(hwnd), max_depth, max_controls, control_type, rects_only, timeout=timeout
     )
+
+
+async def element_at_point(x: int, y: int, timeout: float = DEFAULT_TIMEOUT) -> dict:
+    """Return the UIA control under a screen point (name/type/rect)."""
+    return await _run(_element_at_point_sync, int(x), int(y), timeout=timeout)
+
+
+def element_at_point_sync(x: int, y: int, timeout: float = 2.0) -> dict:
+    """Blocking variant usable from a non-async thread (e.g. the input tracker)."""
+    try:
+        return _executor.submit(_element_at_point_sync, int(x), int(y)).result(timeout=timeout)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 async def find_controls(

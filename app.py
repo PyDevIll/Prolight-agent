@@ -3,6 +3,7 @@ import sys
 import asyncio
 import threading
 from pathlib import Path
+from typing import Optional
 
 from loguru import logger
 
@@ -17,6 +18,10 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 request_queue = None
 agent = None
+# Set while the agent is waiting for the user's answer to an ask_user question;
+# the console loop then routes the next line to this future instead of enqueuing
+# a new request.
+_pending_question: Optional[asyncio.Future] = None
 
 
 def get_request_queue():
@@ -25,6 +30,29 @@ def get_request_queue():
 
 def get_agent():
     return agent
+
+
+async def ask_user_question(question: str, options=None, timeout: float = 300.0) -> Optional[str]:
+    """Ask the user a question on the console and await their reply.
+
+    Blocks the calling (worker) coroutine until the user answers or ``timeout``
+    elapses. Returns the answer text, or None on timeout / no console.
+    """
+    global _pending_question
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future = loop.create_future()
+    _pending_question = fut
+    print("\n[AGENT ASKS] " + str(question), flush=True)
+    if options:
+        print("  options: " + " | ".join(str(o) for o in options), flush=True)
+    try:
+        return await asyncio.wait_for(fut, timeout=float(timeout))
+    except asyncio.TimeoutError:
+        logger.warning("ask_user_question timed out")
+        return None
+    finally:
+        if _pending_question is fut:
+            _pending_question = None
 
 
 # ---- Worker coroutine (processes requests sequentially) ----
@@ -97,6 +125,11 @@ async def get_command() -> None:
             if user_request in ("/q", "/quit", "/exit"):
                 logger.info("Quit requested")
                 return
+
+            # A pending ask_user question consumes the next line as its answer.
+            if _pending_question is not None and not _pending_question.done():
+                _pending_question.set_result(user_request)
+                continue
 
             await request_queue.put({"type": "user", "prompt": user_request})
     finally:

@@ -1,54 +1,55 @@
 # MS Paint (mspaint.exe) — interaction guide
 
-Applies to: Windows 11 Paint (window class `MSPaintApp`, process `mspaint.exe`).
+## Purpose / overview
+- Simple raster drawing editor. Windows 11 Paint; window class `MSPaintApp`, process
+  `mspaint.exe`.
+- The ribbon is custom-drawn: its buttons and colour palette expose almost no UIA. Locate
+  tools by approximate coordinates and confirm the active tool via the canvas pane name.
 
-## Window / focus
-- Find it with `win_list_hwnd(process_filter="paint")`. Title looks like "Безымянный - Paint".
-- Usually maximized; the window rect starts at (-8, -8).
-- **Keyboard focus gotcha:** `win_focus` (AttachThreadInput) reports `foreground: true`
-  but keyboard `SendInput` may NOT reach Paint. If shortcuts (Ctrl+Z, Ctrl+V, ...) do
-  nothing, click the TITLE BAR once with the mouse to really raise the window — then the
-  keyboard works. Mouse clicks work even when the keyboard does not, so the failure is
-  silent. (Real title-bar click at approx (960, 10).)
+## Window & focus
+- Find with `win_list_hwnd(process_filter="paint")`. Title = `"<name> - Paint"`.
+- Usually maximized; rect starts at (-8,-8).
+- **Keyboard focus gotcha:** `win_focus` may report foreground, yet keyboard `SendInput`
+  does NOT reach Paint. If shortcuts (Ctrl+Z, Ctrl+V, ...) do nothing, click the title bar
+  once with the real mouse — then the keyboard works. Mouse clicks work regardless.
+
+## Main areas
+- **Ribbon** (top): tabs (Файл / Главная / Вид), then groups — Инструменты (tools), Фигуры,
+  Кисти, Цвета (palette).
+- **Canvas** (centre): the drawing. At 100% zoom it maps 1:1 to image pixels.
+- **Status bar** (bottom): first field shows the cursor position in image pixels; the right
+  side has zoom controls ("Мельче" / "Крупнее").
 
 ## UI Automation
-- The ribbon exposes NO usable controls: `win_snapshot` reports `uia.coverage` poor and
-  lists only panes + the status bar. Tool buttons and the colour palette cannot be clicked
-  by name.
+- `uia.coverage` is poor: only the canvas pane and the status bar are exposed (plus the zoom
+  buttons).
 - **Active-tool readout (reliable):** the canvas pane's accessible name is
   `Использование инструмента <TOOL> на Холст` — e.g. "...Кисть на Холст" (Brush),
-  "...Заливка цветом на Холст" (Fill). win_snapshot includes named non-actionable controls,
-  so read the pane's name from the snapshot's `uia.controls` after clicking a tool.
+  "...Заливка цветом на Холст" (Fill). `win_snapshot` includes this named pane.
 
-## Ribbon coordinates (screen px, maximized on this machine)
-- Tools group "Инструменты", top row: Карандаш ~ (354,72), **Заливка (Fill) ~ (374,72)**,
-  Текст ~ (394,72). Bottom row: Ластик, Пипетка, Масштаб (~y 103).
-- **Кисть (Brush) split button ~ (460,70)** — click the icon part; ~ (470,70) is the
-  dropdown arrow (opens the brush gallery instead of selecting the tool).
-- Colour palette "Цвета": swatches ~ x 893..1075, top row y ~ 64-78, bottom row y ~ 82-96.
-  **Bright-red swatch (#ED1C24) ~ (958,70)**; white swatch (row2 col1) ~ (902,90).
-- "Цвет 1" (Colour 1) swatch ~ (828,70); "Цвет 2" ~ (855,70).
-- Status-bar zoom buttons: "Мельче" ~ (1786,1038), "Крупнее" ~ (1908,1038).
+## Key controls & what they do (approximate, maximized)
+- Инструменты group: Карандаш, **Заливка (Fill) ~ (374,72)**, Текст; bottom row Ластик,
+  Пипетка, Масштаб (~y 103). **Кисть (Brush) split button ~ (460,70)**; the dropdown arrow
+  ~ (470,70) opens the brush gallery.
+- Цвета palette: swatches ~ x 893..1075, top row y ~ 64-78, bottom row y ~ 82-96.
+  Bright red (#ED1C24) ~ (958,70); white (row2 col1) ~ (902,90).
+- "Цвет 1" ~ (828,70); "Цвет 2" ~ (855,70).
+- Zoom: "Мельче" ~ (1786,1038), "Крупнее" ~ (1908,1038).
 
-## Canvas <-> screen calibration
-- The status bar's first field shows the cursor position over the image in image pixels
-  (`"<x>, <y> пкс"`). Move the mouse and read it to derive the affine mapping.
-- At 100% zoom the mapping is 1:1: **screen = image_px + (5, 144)**, i.e. the image
-  origin (0,0) sits at screen (5, 144). Canvas image is 1152x648 at 100%.
+## Shortcuts
+- `Ctrl+Z` undo, `Ctrl+Y` redo, `Ctrl+S` save, `Ctrl+Shift+S` save as, `Ctrl+A` select all,
+  `Ctrl+V` paste. (Need real keyboard focus — see the gotcha.)
 
-## Locating things deterministically (PREFER over the vision model)
-- The vision model is unreliable for pixel coordinates (inconsistent between calls;
-  hallucinates crop sizes). Prefer:
-  - `screen_find(kind="color", color=[0,0,0], rect=<canvas>, tolerance=80, min_area=40)`
-    → exact bounding boxes of the black hand-drawn shapes (each hollow rectangle outline
-    is a single connected blob).
-  - `screen_find(kind="color", color=[237,28,36], tolerance=90, min_area=4)` → locate and
-    VERIFY red brush marks.
-- Verify a drawn mark with a colour search (deterministic), not by asking vision.
+## Reading app state
+- Active tool: the canvas pane name (see above). Cursor position: the status bar's first field.
+- Colour verification: reading the "Цвет 1" swatch is unreliable — draw a test dot and check
+  its colour with `screen_find(kind="color")` instead.
 
-## Drawing
-- Select Brush (Кисть); set Colour 1 by LEFT-clicking a palette swatch (right-click sets
-  Colour 2). A single brush click leaves a ~7-9 px dot.
-- To fill/verify, the Fill tool is at ~ (374,72); the Fill tool on an enclosed region
-  paints only that region (clicking a background gap would flood the whole canvas).
-- Undo = Ctrl+Z (only works after the window truly has keyboard focus — see above).
+## Gotchas
+- The ribbon exposes no clickable controls; locate by coordinates and verify the tool.
+- The keyboard may be silently dead until the window is raised with a real click.
+- A single brush click leaves a ~7-9 px dot — mind thin shapes.
+- With the Fill tool, clicking a background gap floods the whole canvas.
+
+## Last verified
+- 2026-09-20

@@ -25,6 +25,11 @@ Do **not** call many separate perception tools — the snapshot already contains
 - **Exact/long values** → `clipboard_set(text)` then `keybd_hotkey("ctrl+v")`.
 - **Scroll** → `mouse_wheel(amount)` (positive = up).
 - **Standard background controls** → `win_send_message` (fallback; no focus change).
+- **Learn an app** → `load_interaction_guide(hwnd=...)`; if missing, discover (`win_snapshot` + `vision_look` + `screen_probe(hover)`) and `save_interaction_guide`.
+- **Discover what a control does** → `screen_probe(x, y, action="hover")` (safe pixel diff); for a click use `action="click", undo_hotkey="ctrl+z"`; use `action="scroll"` to test if an area is scrollable.
+- **Ask the user** → `ask_user(question, options=[...])` before an uncertain or state-changing step.
+- **Find/follow a procedure** → `find_workflow(query=...)`, then `load_workflow(name)`; save with `save_workflow`.
+- **Learn from the user** → `start_learning_session(label=...)`, let them perform the task, then `stop_learning_session()` and summarize into a workflow.
 - **Editing files:** always `fs_read` first, then use `fs_aedit` or `fs_edit_blocks` with `dry_run=True` to preview changes, then apply without `dry_run`.
 
 ### Discipline
@@ -38,8 +43,11 @@ Do **not** call many separate perception tools — the snapshot already contains
 ### Efficiency
 - One `win_snapshot` beats several perception calls; then `win_changes` is the cheap loop.
 - Ask targeted questions of the vision model rather than "describe everything".
+- Vision calls are one-shot (no memory): reuse a `label`/watch or restate the needed context in `query`; use `vision_compare(pixel_only=true)` for change checks instead of a second look.
 - Batch read-only observations before making a change.
 
 ### Learning
-- When you figure out how an application behaves, offer to save a concise fact to its interaction guide.
-- When you complete (or are taught) a repeatable procedure, offer to save it as a workflow.
+- Before the first real interaction with an app, `load_interaction_guide`; if none exists, do a discovery pass and save a general guide.
+- When you figure out how an application behaves, record it (`save_interaction_guide` / `note_fact`).
+- Before a task, `find_workflow`/`load_workflow`; when you complete (or are taught) a repeatable procedure, save it as a workflow.
+- Ask the user (`ask_user`) rather than guessing, and confirm before state-changing clicks.

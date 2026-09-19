@@ -1,12 +1,11 @@
 """Dedicated vision sub-agent for ProLight-agent.
 
 Why a separate agent?
-  * It keeps its **own** message history, so large screenshots never enter the
-    main agent's context and never invalidate its DeepSeek prefix cache.
   * It uses a **separate API key** (HELPER by default) to isolate rate limits
     and accounting from the main reasoning model.
-  * It holds short-lived **visual memory** ("was this checkbox ticked before?")
-    and a registry of *watches* (a labelled region + its last image), so a
+  * Calls are **one-shot**: each request carries only the system prompt and the
+    current crop, so a stale frame can never bias a fresh observation.
+  * It keeps a registry of *watches* (a labelled region + its last image), so a
     follow-up can compare BEFORE vs AFTER or detect changes with a cheap pixel
     diff.
 
@@ -27,8 +26,7 @@ from PIL import Image
 
 from lib import image_ops
 from lib import winapi
-from lib.vision_client import DEEPSEEK_BASE_URL, VISION_MODEL, analyze_messages, encode_image
-from lib.visual_context_manager import VisualContext, VisualTurn
+from lib.vision_client import DEEPSEEK_BASE_URL, analyze_messages, encode_image
 
 DEFAULT_SYSTEM_PROMPT = """You are ProLight's visual perception module for a Windows desktop.
 You receive small, cropped screenshots - usually a single control or a small region.
@@ -93,9 +91,6 @@ class VisionAgent:
         self,
         name: str = "VISION",
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
-        max_turns: int = 10,
-        keep_images: int = 2,
-        max_text_tokens: int = 3000,
         timeout: float = 120.0,
     ) -> None:
         self.name = name
@@ -112,26 +107,16 @@ class VisionAgent:
             timeout=timeout,
             max_retries=1,
         )
-        self.context = VisualContext(
-            max_turns=max_turns, keep_images=keep_images, max_text_tokens=max_text_tokens
-        )
         self.watches: dict[str, dict] = {}
         logger.info(f"VisionAgent '{name}' initialized (key={'set' if api_key else 'MISSING'})")
 
     # ── low-level completion ──────────────────────────────────────────────
-    async def _summarize(self, prompt: str) -> str:
-        resp = await self._client.chat.completions.create(
-            model=VISION_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
-            temperature=0.2,
-        )
-        return (resp.choices[0].message.content or "").strip()
-
     async def _complete(self, parts, max_tokens: int = 1024) -> str:
-        if self.context.needs_compression():
-            await self.context.compress(self._summarize)
-        messages = self.context.build(self.system_prompt, parts)
+        """One-shot completion: only the system prompt and this request's parts."""
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": parts},
+        ]
         return await analyze_messages(messages, max_tokens=max_tokens, client=self._client)
 
     async def ask_once(self, image, query: str, max_tokens: int = 1024) -> str:
@@ -199,7 +184,6 @@ class VisionAgent:
         pad: int = 0,
         scale: float = 1.0,
         max_dim: int = 1600,
-        remember: bool = True,
         max_tokens: int = 1024,
     ) -> dict:
         """Capture a region (or control) and ask the vision model about it."""
@@ -227,18 +211,11 @@ class VisionAgent:
         except Exception as e:
             return {"ok": False, "error": f"vision call failed: {e}", "path": str(path)}
 
-        turn = VisualTurn(
-            label=label, query=query, answer=answer,
-            image_path=str(path), image_tokens=image_ops.estimate_image_tokens(img),
-        )
-        if remember:
-            self.context.add(turn)
         if label:
             self.watches[label] = {
                 "label": label, "rect": rect_s, "hwnd": hwnd_s, "source": src,
                 "pad": pad, "scale": scale, "max_dim": max_dim, "meta": meta,
                 "image_path": str(path), "answer": answer, "query": query,
-                "image_tokens": turn.image_tokens,
             }
 
         logger.info(f"vision look[{label or '-'}] {w}x{h} via {src}: {answer[:80]!r}")
@@ -246,7 +223,7 @@ class VisionAgent:
             "ok": True, "label": label, "rect": rect_s, "source": src,
             "path": str(path), "image_size": {"width": w, "height": h},
             "screen_rect": meta["screen_rect"],
-            "answer": answer, "context": self.context.stats(),
+            "answer": answer,
         }
 
     async def locate(
@@ -383,10 +360,6 @@ class VisionAgent:
 
         watch["image_path"] = str(path)
         watch["answer"] = answer
-        self.context.add(VisualTurn(
-            label=label, query=q, answer=answer,
-            image_path=str(path), image_tokens=image_ops.estimate_image_tokens(img),
-        ))
         logger.info(f"vision compare[{label}]: changed={bool(diff and diff.get('changed'))} -> {answer[:80]!r}")
         return {"ok": True, "label": label, "answer": answer, "pixel_diff": diff, "path": str(path)}
 
@@ -429,7 +402,6 @@ class VisionAgent:
         return 1 if self.watches.pop(label, None) is not None else 0
 
     def reset(self) -> None:
-        self.context.clear()
         self.watches.clear()
 
 

@@ -24,11 +24,13 @@ All return `screen_center` ready for `mouse_click`. Coordinates always come from
 code/OS (snapshot geometry, UIA, OCR), never from the vision model.
 
 ### Vision (separate sub-agent, opt-in)
-Vision runs in a separate sub-agent (own key and context), so screenshots never
-clutter your reasoning context. Look at a **small region or a single control**.
+Vision runs in a separate sub-agent (own key). Every call is **one-shot**: it sees
+only the crop you send — never your history or an earlier frame. Look at a
+**small region or a single control**.
 - `vision_look(rect=... | hwnd=... | control...)` — describe a region/control; pass `label` to watch it. `structured=true` gives approximate boxes (fractions of the crop, snapped to pixels) — treat them as hints and verify.
 - `vision_compare(label, pixel_only=true)` — cheap pixel check first; without it, re-capture and ask what changed (BEFORE vs AFTER).
 - `vision_forget(list_only=true)` — list or drop watches.
+- Across calls, continuity is **yours**: reuse a `label` (watch) or restate the needed context in `query`. For consecutive looks at the same area, keep one label and compare rather than re-describing.
 
 **Verification loop after any action:** `win_changes()` (cheap, no vision). If it
 reports a change, inspect the delta; if you need semantics, `vision_look`/`vision_compare`.
@@ -60,6 +62,12 @@ delivered but keyboard not" situation — so check `keyboard_delivery` before ty
 - `win_click_control(id="c7")` or `win_click_control(hwnd=..., name="OK", control_type="Button")` — click a control (by snapshot id or criteria).
 - `win_set_control_text(id="c3", text="...")` — set an Edit/Document value directly (no typing).
 - `win_send_message` — synthetic WM_ messages, standard controls only (fallback; browsers/custom UIs ignore it).
+
+### Learning & discovery
+- Before the first real interaction with an app, `load_interaction_guide(hwnd=...)`. If there is no guide, run a discovery pass (`win_snapshot` + `vision_look` + `screen_probe(hover)`) and `save_interaction_guide` with the general areas and their purpose (coordinates of key controls are fine, marked approximate).
+- `screen_probe(x, y, action="hover"|"click"|"scroll")` is a safe BEFORE/AFTER pixel diff to learn what a control does; pass `undo_hotkey="ctrl+z"` when clicking, or `action="scroll"` to test whether an area is scrollable (a change means it moved).
+- `ask_user(question, options=[...])` asks the user and waits for the answer — use it before any uncertain or state-changing step.
+- `find_workflow`/`load_workflow` before a task; `start_learning_session`/`stop_learning_session` to record the user teaching a workflow.
 
 ### Rules of action
 1. **Focus first, and verify keyboard focus.** Use `win_ensure_foreground(hwnd)` and confirm `keyboard_delivery` before keyboard input.

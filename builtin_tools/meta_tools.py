@@ -1,6 +1,7 @@
 """Meta-tools for ProLight-agent — self-management commands.
 
-Provides: ping (health check) and reload_tools (hot-reload builtin tool modules).
+Provides: ping (health check), reload_tools (hot-reload builtin tool modules)
+and ask_user (ask the user a question mid-task and wait for the answer).
 """
 
 import json
@@ -32,11 +33,40 @@ async def reload_tools() -> str:
     return f"Reloaded {count} module(s).\n\n{tool_list}"
 
 
+async def ask_user(question: str, options: list = None, timeout: float = 300.0) -> str:
+    """Ask the user a question on the console and wait for their answer.
+
+    Use it before an uncertain or state-changing step (e.g. before clicking a
+    control during an app discovery pass). Blocks until the user replies.
+
+    Args:
+        question: the question to ask.
+        options: optional list of suggested answers to show.
+        timeout: seconds to wait (default 300).
+    """
+    from app import ask_user_question
+
+    answer = await ask_user_question(question, options=options, timeout=timeout)
+    if answer is None:
+        return json.dumps({"ok": False, "error": "no answer (timed out or no console)"}, ensure_ascii=False)
+    return json.dumps({"ok": True, "answer": answer}, ensure_ascii=False)
+
+
 TOOL_DEFINITIONS = [
     ("ping", ping, "Simple ping/pong health check. Returns pong with current timestamp.", {
         "type": "object",
         "properties": {},
         "required": [],
+    }),
+    ("ask_user", ask_user, "Ask the user a question and wait for their answer (for "
+     "uncertain or state-changing steps). Blocks until they reply.", {
+        "type": "object",
+        "properties": {
+            "question": {"type": "string", "description": "The question to ask"},
+            "options": {"type": "array", "items": {"type": "string"}, "description": "Suggested answers to show"},
+            "timeout": {"type": "number", "description": "Seconds to wait (default 300)"},
+        },
+        "required": ["question"],
     }),
     ("reload_tools", reload_tools, "Hot-reload all builtin tool modules without restarting", {
         "type": "object",

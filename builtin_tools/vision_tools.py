@@ -8,7 +8,8 @@ context.
 Perception is normally done with ``win_snapshot``; these tools are for a
 targeted semantic look or a structured element search:
   - vision_look    : capture a region/control/file and describe it (optional
-                     ``structured`` boxes); remembers it when labelled.
+                     ``structured`` boxes); watched for vision_compare when
+                     labelled. Every call is one-shot (no history).
   - vision_compare : re-capture a watched region (BEFORE vs AFTER), or a cheap
                      pixel-only change check.
   - vision_forget  : list or drop watched regions.
@@ -38,7 +39,6 @@ async def vision_look(
     source: str = "auto",
     pad: int = 0,
     scale: float = 1.0,
-    remember: bool = True,
     path: str = "",
     structured: bool = False,
 ) -> str:
@@ -85,7 +85,7 @@ async def vision_look(
         else:
             result = await va.look(
                 rect=rect, hwnd=hwnd, control=control, query=query, label=label,
-                source=source, pad=pad, scale=scale, remember=remember,
+                source=source, pad=pad, scale=scale,
             )
     except Exception as e:
         logger.error(f"vision_look failed: {e}")
@@ -145,7 +145,6 @@ TOOL_DEFINITIONS = [
                 "source": {"type": "string", "description": "auto | screen | window (default auto)"},
                 "pad": {"type": "integer", "description": "Extra pixels around the region (default 0)"},
                 "scale": {"type": "number", "description": "Zoom factor for tiny controls, e.g. 3.0 (default 1.0)"},
-                "remember": {"type": "boolean", "description": "Add this observation to visual context (default true)"},
                 "path": {"type": "string", "description": "Analyze an existing image file instead of capturing"},
                 "structured": {"type": "boolean", "description": "Return approximate element boxes (fractions), not prose"},
             },
