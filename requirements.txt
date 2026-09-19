@@ -4,9 +4,12 @@ tiktoken~=0.13.0
 python-dotenv~=1.2.2
 httpx~=0.28.1
 pillow
+numpy~=2.5.3
+scipy~=1.18.1
 mss~=10.2.0
 pywin32
 pywinauto
 comtypes
 pynput
 pyperclip
+truststore~=0.10.4

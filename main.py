@@ -16,4 +16,9 @@ async def main() -> None:
 
 if __name__ == "__main__":
     load_dotenv()
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # asyncio.run re-raises KeyboardInterrupt after cancelling tasks; catch
+        # it here so Ctrl+C exits cleanly instead of printing a traceback.
+        print()

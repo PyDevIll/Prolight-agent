@@ -14,6 +14,7 @@ No third-party dependencies. Coordinates are physical pixels once
 from __future__ import annotations
 
 import ctypes
+import time
 from ctypes import wintypes
 from typing import Optional
 
@@ -53,6 +54,20 @@ class RECT(ctypes.Structure):
 
 class POINT(ctypes.Structure):
     _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+
+class GUITHREADINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("hwndActive", wintypes.HWND),
+        ("hwndFocus", wintypes.HWND),
+        ("hwndCapture", wintypes.HWND),
+        ("hwndMenuOwner", wintypes.HWND),
+        ("hwndMoveSize", wintypes.HWND),
+        ("hwndCaret", wintypes.HWND),
+        ("rcCaret", RECT),
+    ]
 
 
 class BITMAPINFOHEADER(ctypes.Structure):
@@ -127,6 +142,8 @@ user32.SetFocus.argtypes = [wintypes.HWND]
 user32.SetFocus.restype = wintypes.HWND
 user32.SetActiveWindow.argtypes = [wintypes.HWND]
 user32.SetActiveWindow.restype = wintypes.HWND
+user32.GetGUIThreadInfo.argtypes = [wintypes.DWORD, ctypes.POINTER(GUITHREADINFO)]
+user32.GetGUIThreadInfo.restype = wintypes.BOOL
 
 user32.GetWindowDC.argtypes = [wintypes.HWND]
 user32.GetWindowDC.restype = wintypes.HDC
@@ -431,7 +448,25 @@ def _get_window_thread_id(hwnd: int) -> int:
     return int(user32.GetWindowThreadProcessId(hwnd, None) or 0)
 
 
-def focus_window(hwnd: int) -> dict:
+def get_thread_focus_info(thread_id: int) -> dict:
+    """Return the active/focus/caret HWNDs of a thread (via GetGUIThreadInfo).
+
+    ``hwnd_focus`` is the window that will actually receive keyboard input;
+    it can be a child of the target window (or 0 when the thread has no focus).
+    """
+    info = GUITHREADINFO()
+    info.cbSize = ctypes.sizeof(GUITHREADINFO)
+    if not thread_id or not user32.GetGUIThreadInfo(int(thread_id), ctypes.byref(info)):
+        return {"ok": False, "hwnd_active": 0, "hwnd_focus": 0, "hwnd_caret": 0}
+    return {
+        "ok": True,
+        "hwnd_active": int(info.hwndActive or 0),
+        "hwnd_focus": int(info.hwndFocus or 0),
+        "hwnd_caret": int(info.hwndCaret or 0),
+    }
+
+
+def focus_window(hwnd: int, retries: int = 3) -> dict:
     """Restore (if needed), bring to foreground and focus a window.
 
     Windows enforces foreground-lock rules: a process that is not the active
@@ -440,28 +475,20 @@ def focus_window(hwnd: int) -> dict:
     queue to the foreground (and target) thread's queue, call
     SetForegroundWindow, then detach.
 
-    Success is verified via GetForegroundWindow().
+    Success is verified two ways, because being "foreground" is NOT enough for
+    keyboard input to arrive:
+      * ``ok``             — GetForegroundWindow() == hwnd;
+      * ``keyboard_focus`` — the target thread's focus window (GetGUIThreadInfo)
+        belongs to that thread (None if it could not be determined).
+
+    Retries the whole sequence a few times, since the first attempt is
+    sometimes ignored right after the window is restored.
     """
     hwnd = int(hwnd)
     if not is_window(hwnd):
         return {"ok": False, "error": f"Invalid window handle: {hwnd}"}
 
     was_minimized = bool(user32.IsIconic(hwnd))
-
-    # Fast path: already foreground.
-    if get_foreground_window() == hwnd:
-        if was_minimized:
-            user32.ShowWindow(hwnd, SW_RESTORE)
-        user32.SetFocus(hwnd)
-        return {
-            "ok": True,
-            "hwnd": hwnd,
-            "foreground_hwnd": hwnd,
-            "was_minimized": was_minimized,
-            "title": get_window_text(hwnd),
-            "method": "already-foreground",
-        }
-
     if was_minimized:
         user32.ShowWindow(hwnd, SW_RESTORE)
 
@@ -471,32 +498,57 @@ def focus_window(hwnd: int) -> dict:
     except OSError:
         pass
 
-    cur_thread = int(kernel32.GetCurrentThreadId())
-    fg_hwnd = get_foreground_window()
-    fg_thread = _get_window_thread_id(fg_hwnd)
     target_thread = _get_window_thread_id(hwnd)
-
-    attached: list[int] = []
-    for other in (fg_thread, target_thread):
-        if other and other != cur_thread and other not in attached:
-            if user32.AttachThreadInput(cur_thread, other, True):
-                attached.append(other)
-
-    try:
-        user32.BringWindowToTop(hwnd)
-        user32.SetForegroundWindow(hwnd)
-        user32.SetActiveWindow(hwnd)
-        user32.SetFocus(hwnd)
-    finally:
-        # Always detach, even if a call above raised.
-        for other in attached:
-            user32.AttachThreadInput(cur_thread, other, False)
-
+    cur_thread = int(kernel32.GetCurrentThreadId())
     fg = get_foreground_window()
+    keyboard_focus = None
+    attempts = 0
+
+    for attempt in range(1, max(1, int(retries)) + 1):
+        attempts = attempt
+        fg = get_foreground_window()
+        if fg == hwnd and keyboard_focus is True:
+            break
+
+        fg_thread = _get_window_thread_id(fg)
+        attached: list[int] = []
+        for other in (fg_thread, target_thread):
+            if other and other != cur_thread and other not in attached:
+                if user32.AttachThreadInput(cur_thread, other, True):
+                    attached.append(other)
+        try:
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+            user32.SetActiveWindow(hwnd)
+            user32.SetFocus(hwnd)
+        finally:
+            for other in attached:
+                user32.AttachThreadInput(cur_thread, other, False)
+
+        fg = get_foreground_window()
+        info = get_thread_focus_info(target_thread)
+        if info["ok"]:
+            focus_hwnd = info["hwnd_focus"]
+            keyboard_focus = bool(focus_hwnd) and _get_window_thread_id(focus_hwnd) == target_thread
+        else:
+            keyboard_focus = None
+
+        if fg == hwnd and keyboard_focus is True:
+            break
+        time.sleep(0.05)
+
+    info = get_thread_focus_info(target_thread)
+    if info["ok"]:
+        focus_hwnd = info["hwnd_focus"]
+        keyboard_focus = bool(focus_hwnd) and _get_window_thread_id(focus_hwnd) == target_thread
     return {
         "ok": fg == hwnd,
         "hwnd": hwnd,
         "foreground_hwnd": fg,
+        "keyboard_focus": keyboard_focus,
+        "focus_hwnd": info.get("hwnd_focus", 0),
+        "target_thread": target_thread,
+        "attempts": attempts,
         "was_minimized": was_minimized,
         "title": get_window_text(hwnd),
         "method": "attach-thread-input",

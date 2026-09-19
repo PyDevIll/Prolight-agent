@@ -7,7 +7,7 @@ Windows desktop GUI-automation agent ("ProLight"). Console-only, **non-admin**, 
 - `python main.py` from the repo root (use `.venv`). Needs `.env` with `DEEPSEEK_API_KEY_MASTERMIND` and `DEEPSEEK_API_KEY_HELPER`.
 - Interactive `ProLight> ` console: type a task; `/q` `/quit` `/exit` to stop. `load_dotenv()` has no path, so `.env` is found only when CWD = repo root.
 - Static check only: `python -m py_compile <files>`. There is no test/lint/typecheck command.
-- First launch can look hung: cold imports are slow under endpoint protection (`import openai` ~77 s cold, ~5 s warm). Start once and wait.
+- First launch can look hung: cold imports are slow under endpoint protection (`import openai` ~77 s cold, ~5 s warm; `scipy` adds a few seconds). Start once and wait.
 - `git` may not be on PATH; portable git is `C:\Users\PC-3111\Documents\Dev\Git\App\Git\cmd\git.exe`.
 
 ## LLM / vision
@@ -21,6 +21,7 @@ Windows desktop GUI-automation agent ("ProLight"). Console-only, **non-admin**, 
 
 - `main.py` → `app.start_app()`: builds a global `agent`, a global `request_queue`, one sequential `worker()`, and the console loop.
 - Request flow: console → `{"type":"user","prompt":...}` → `worker()` → `components/cmd_line.py` → `agent.run_with_crash_recovery()`. Only the `user` type is handled.
+- Shutdown: `get_command()` reads stdin on a **daemon thread from a dup of fd 0** — not `sys.stdin`. `asyncio.to_thread(input)` hangs exit (asyncio.run joins the default executor and the thread never returns), while a daemon `input()` crashes finalization (`_enter_buffered_busy ... due to daemon threads`) by holding stdin's buffer lock. `start_app()` waits with `asyncio.wait(..., FIRST_COMPLETED)` and cancels the survivor, so `/q`, EOF, and Ctrl+C all exit cleanly (`main.py` catches `KeyboardInterrupt`).
 - `lib/` = low-level layers: `winapi.py` (ctypes user32/gdi32/kernel32/dwmapi), `input_backend.py` (SendInput + WM_ fallback), `ui_tree.py` (pywinauto UIA control discovery), `image_ops.py` (crop/grab/pixel-diff), `vision_client.py` (transport), `vision_agent.py` (vision sub-agent), `visual_context_manager.py`, `console.py`.
 - `builtin_tools/` = the agent's tools; `system_prompts/` = the agent's runtime prompt (core/desktop/tools_guidelines/learning) — editing these changes behavior.
 - `agent.py`, `context_manager.py`, `tool_registry.py` originated as verbatim copies of the sibling iNysha project; `context_manager.py` has since diverged (token-driven compression), and `tool_registry.py` hardcodes the `builtin_tools` package name — keep it.
@@ -33,9 +34,11 @@ Windows desktop GUI-automation agent ("ProLight"). Console-only, **non-admin**, 
 - Schema property keys must match the function's kwarg names exactly; params with defaults must NOT be in `required`.
 - New module file → add it to BOTH the import list and the `register_all()` body in `builtin_tools/__init__.py`.
 - `reload_tools` hot-reloads the submodules and the package `__init__.py`, so a new module added to that import list is picked up without a restart.
-- Per-tool timeout 120 s (`agent.py:132`); agent loop caps at 7 iterations (`agent.py:332`).
+- Per-tool timeout 120 s (`agent.py:141`); agent loop caps at 7 iterations (`agent.py:339`).
 - When you add a tool, document it in `system_prompts/desktop.md` / `tools_guidelines.md` (both are injected into the LLM).
 - UI Automation tools (`builtin_tools/uia_tools.py`, backed by `lib/ui_tree.py`): `win_enum_controls`, `win_get_control_rects`, `win_find_controls`, `win_wait_for`, `win_click_control` (preferred click), `win_set_control_text` (UIA ValuePattern). UIA runs on one dedicated STA worker thread (`lib/ui_tree._run`); `sys.coinit_flags = 2` must be set before comtypes/pywinauto are imported.
+- Deterministic geometry (`builtin_tools/search_tools.py`, backed by `lib/image_ops.py` using numpy + scipy): `screen_find_color` (numpy colour mask + `scipy.ndimage.label`), `screen_find_template` (FFT SSD). For custom-drawn UIs (Paint) where UIA is empty and vision coordinates are unreliable. Return screen coordinates.
+- Focus/input reliability: `win_focus` returns `keyboard_focus` (verified via `GetGUIThreadInfo`, not just foreground); `win_ensure_foreground`/`win_get_foreground` added. `keybd_*` accept an optional `hwnd` and refuse loudly if it lacks keyboard focus (SendInput fails silently otherwise).
 
 ## Vision sub-agent
 
@@ -43,7 +46,8 @@ Windows desktop GUI-automation agent ("ProLight"). Console-only, **non-admin**, 
 - It looks at small regions/controls, not whole windows: `look()` crops via `lib/image_ops.py` (mss screen grab, or PrintWindow when occluded), saves to `data/vision/`, and remembers labelled *watches*.
 - `compare(label)` re-captures and sends BEFORE+AFTER images in one request; `changed(label)` is a pixel-diff with **no** LLM call — call it first to avoid a needless vision request.
 - `lib/visual_context_manager.py` (`VisualContext`) keeps only the last `keep_images` turns as images; older turns become text and are summarised into `memory` once they exceed `max_turns`/`max_text_tokens`.
-- Tools: `vision_look`, `vision_compare`, `vision_changed`, `vision_watches`, `vision_forget`. `win_see` and `vision_analyze` route through the same agent via its one-shot `ask_once` (so all vision uses the HELPER key).
+- Tools: `vision_look`, `vision_compare`, `vision_changed`, `vision_watches`, `vision_forget`. `win_see` and `vision_analyze` route through the same agent via its one-shot `ask_once` (so all live vision uses the HELPER key).
+- Do NOT call `lib/vision_client.analyze_image`/its shared `_get_client()` directly: that default client uses the **MASTERMIND** key (`vision_client.py:32`) and is a dead path. `vision_agent` always passes its own HELPER client into `analyze_messages`.
 
 ## Windows / input gotchas (hard-won)
 
@@ -58,7 +62,7 @@ Windows desktop GUI-automation agent ("ProLight"). Console-only, **non-admin**, 
 
 ## Learning DB
 
-- `interaction_guides/<app>.md` and `workflows/<task>.md` are the agent's learned-fact databases (see `system_prompts/learning.md`). Both dirs exist but are empty; neither is gitignored.
+- `interaction_guides/<app>.md` and `workflows/<task>.md` are the agent's learned-fact databases (see `system_prompts/learning.md`). Neither dir exists yet (Phase 4) and nothing reads/writes them; neither would be gitignored.
 
 ## Git hygiene
 
@@ -70,5 +74,5 @@ Windows desktop GUI-automation agent ("ProLight"). Console-only, **non-admin**, 
 
 - Phases 0–3 done (scaffold, perception, actuation, UIA control discovery) plus the vision sub-agent (region/control change-verification); next is Phase 4 (learning: guides/workflows DB + `components/tracker.py`).
 - Roadmap: `DEVLOG.txt` + `GENERATED_PLAN.txt`; requirements: `APP_SPECS_OUTLINES.txt`; real-world friction log: `ISSUES_AND_IMPROVEMENT_IDEAS.txt` (Phase 3 addresses its "No OCR / UI Automation" and pixel-coordinate items).
-- Planned but not yet created: `builtin_tools/app_tools.py`, `learning_tools.py`, `components/tracker.py`, `heartbeat.py`. `pynput` is in `requirements.txt` but not imported anywhere yet.
+- Planned but not yet created: `interaction_guides/`, `workflows/`, `builtin_tools/app_tools.py`, `learning_tools.py`, `components/tracker.py`, `heartbeat.py`. `pynput` and `pyperclip` are in `requirements.txt` but not imported anywhere yet.
 - `reference_sources/` (gitignored) holds the verbatim iNysha copies and `UniClicker_sample_source/` (Delphi input-capture reference) — reference only, don't edit.

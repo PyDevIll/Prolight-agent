@@ -39,7 +39,19 @@ Rules:
   enabled/disabled, expanded/collapsed, on/off, the text/value, or a count.
 - For BEFORE/AFTER, state exactly what changed. If nothing changed, say "no change".
 - If the image is too small or blurry to be sure, say "unclear".
-- Do not output pixel coordinates unless explicitly asked; if asked, give one integer pair."""
+- The exact image size in pixels is given in the prompt. Never guess or invent
+  the image size or scale; trust the stated numbers.
+- Never output pixel coordinates. Describe positions qualitatively (e.g.
+  "top-left", "next to the Save button"). Pixel geometry is obtained
+  deterministically by other tools, never from you."""
+
+
+def _with_size(query: str, width: int, height: int) -> str:
+    """Prepend the true image dimensions so the model cannot hallucinate scale."""
+    return (
+        f"IMAGE SIZE: exactly {width}x{height} pixels (origin at top-left, 0,0).\n"
+        f"{query}"
+    )
 
 
 class VisionAgent:
@@ -92,13 +104,13 @@ class VisionAgent:
 
     async def ask_once(self, image, query: str, max_tokens: int = 1024) -> str:
         """One-shot analysis with no history (used by win_see / vision_analyze)."""
-        data_url, _w, _h = encode_image(image)
+        data_url, w, h = encode_image(image)
         messages = [
             {"role": "system", "content": self.system_prompt},
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": query},
+                    {"type": "text", "text": _with_size(query, w, h)},
                     {"type": "image_url", "image_url": {"url": data_url}},
                 ],
             },
@@ -166,14 +178,16 @@ class VisionAgent:
         rect_s, hwnd_s = region["rect"], region.get("hwnd")
         src = self._pick_source(source, hwnd_s, rect_s)
         try:
-            img = image_ops.grab_region(rect_s, source=src, hwnd=hwnd_s, pad=pad, scale=scale, max_dim=max_dim)
+            img, meta = image_ops.grab_region_with_meta(
+                rect_s, source=src, hwnd=hwnd_s, pad=pad, scale=scale, max_dim=max_dim
+            )
         except Exception as e:
             return {"ok": False, "error": f"capture failed: {e}"}
 
         path = image_ops.save(img, label or "look")
         data_url, w, h = encode_image(img, max_dim=max_dim)
         parts = [
-            {"type": "text", "text": query},
+            {"type": "text", "text": _with_size(query, w, h)},
             {"type": "image_url", "image_url": {"url": data_url}},
         ]
         try:
@@ -190,7 +204,7 @@ class VisionAgent:
         if label:
             self.watches[label] = {
                 "label": label, "rect": rect_s, "hwnd": hwnd_s, "source": src,
-                "pad": pad, "scale": scale, "max_dim": max_dim,
+                "pad": pad, "scale": scale, "max_dim": max_dim, "meta": meta,
                 "image_path": str(path), "answer": answer, "query": query,
                 "image_tokens": turn.image_tokens,
             }
@@ -199,6 +213,7 @@ class VisionAgent:
         return {
             "ok": True, "label": label, "rect": rect_s, "source": src,
             "path": str(path), "image_size": {"width": w, "height": h},
+            "screen_rect": meta["screen_rect"],
             "answer": answer, "context": self.context.stats(),
         }
 

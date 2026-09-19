@@ -73,12 +73,54 @@ async def win_get_info(hwnd: int) -> str:
 async def win_focus(hwnd: int) -> str:
     """Bring a window to the foreground and focus it.
 
-    Restores the window first if it is minimized. Returns the resulting
-    foreground state so the caller can verify success.
+    Restores the window first if it is minimized. Returns both ``ok``
+    (foreground) and ``keyboard_focus`` (the target thread's real keyboard
+    focus, via GetGUIThreadInfo). Keyboard input only works when
+    ``keyboard_focus`` is true — check it before typing.
     """
     hwnd = int(hwnd)
     result = winapi.focus_window(hwnd)
-    logger.info(f"win_focus({hwnd}): ok={result.get('ok')} title={result.get('title')!r}")
+    logger.info(
+        f"win_focus({hwnd}): ok={result.get('ok')} "
+        f"keyboard_focus={result.get('keyboard_focus')} title={result.get('title')!r}"
+    )
+    return _dump(result)
+
+
+async def win_get_foreground() -> str:
+    """Return the current foreground window and its real keyboard-focus window.
+
+    Use before sending keyboard input to confirm which window will receive it.
+    """
+    hwnd = winapi.get_foreground_window()
+    if not hwnd:
+        return _dump({"ok": False, "error": "No foreground window"})
+    thread = winapi._get_window_thread_id(hwnd)
+    focus = winapi.get_thread_focus_info(thread)
+    return _dump({"ok": True, **winapi.get_window_info(hwnd), "keyboard_focus": focus})
+
+
+async def win_ensure_foreground(hwnd: int, retries: int = 3, click_title: bool = False) -> str:
+    """Focus a window and verify keyboard focus, retrying; optionally nudge it.
+
+    ``keyboard_focus`` can still be false even when ``win_focus`` reports the
+    window as foreground (SendInput keyboard then silently goes nowhere). If
+    ``click_title`` is true, a real click on the title bar (non-client, safe)
+    is used as a last resort and focus is re-checked.
+    """
+    hwnd = int(hwnd)
+    result = winapi.focus_window(hwnd, retries=retries)
+    success = bool(result.get("ok")) and result.get("keyboard_focus") is not False
+    if not success and click_title:
+        rect = winapi.get_window_rect(hwnd)
+        if rect:
+            x = rect["left"] + rect["width"] // 2
+            y = rect["top"] + 12
+            await ib.move_to(x, y, duration=0.1)
+            ib.click("left")
+            result = winapi.focus_window(hwnd, retries=retries)
+            result["nudged_with_title_click"] = True
+    logger.info(f"win_ensure_foreground({hwnd}): ok={result.get('ok')} keyboard_focus={result.get('keyboard_focus')}")
     return _dump(result)
 
 
@@ -173,6 +215,29 @@ TOOL_DEFINITIONS = [
             "type": "object",
             "properties": {
                 "hwnd": {"type": "integer", "description": "Window handle to focus"},
+            },
+            "required": ["hwnd"],
+        },
+    ),
+    (
+        "win_get_foreground",
+        win_get_foreground,
+        "Return the current foreground window and the window that actually has "
+        "keyboard focus. Use before typing to confirm input will be delivered.",
+        {"type": "object", "properties": {}, "required": []},
+    ),
+    (
+        "win_ensure_foreground",
+        win_ensure_foreground,
+        "Focus a window and verify real keyboard focus, retrying; if still not "
+        "focused and click_title=true, nudges with a safe title-bar click. "
+        "Prefer this over win_focus before typing when focus is unreliable.",
+        {
+            "type": "object",
+            "properties": {
+                "hwnd": {"type": "integer", "description": "Window handle to focus"},
+                "retries": {"type": "integer", "description": "Focus attempts (default 3)"},
+                "click_title": {"type": "boolean", "description": "Nudge with a title-bar click if needed (default false)"},
             },
             "required": ["hwnd"],
         },

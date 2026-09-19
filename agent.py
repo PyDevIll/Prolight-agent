@@ -249,32 +249,48 @@ class Agent:
             messages.append(self.messages._entry_to_openai_dict(entry))
 
 
-        # ---- NORMALISE: fix orphaned tool messages ----
-        # Convert any tool message that is not immediately preceded by an assistant
-        # with a matching tool_call_id into a user message.
+        # ---- NORMALISE: make the tool-call sequence API-valid ----
+        # Two failure modes must be repaired, otherwise the API returns 400:
+        #   1. an assistant `tool_calls` message with no matching tool replies
+        #      (e.g. the process was killed mid-tool-call and crash recovery
+        #      restored a dangling assistant message);
+        #   2. an orphaned `tool` message with no preceding `tool_calls`.
         fixed_messages = []
-        active_tool_call_ids = set()
-        for msg in messages:
+        i = 0
+        n = len(messages)
+        while i < n:
+            msg = messages[i]
             role = msg.get("role")
             if role == "assistant" and msg.get("tool_calls"):
-                for tc in msg["tool_calls"]:
-                    active_tool_call_ids.add(tc["id"])
-                fixed_messages.append(msg)
+                ids = [tc.get("id") for tc in msg["tool_calls"]]
+                # Collect the run of tool messages that immediately follow.
+                answered: dict = {}
+                j = i + 1
+                while j < n and messages[j].get("role") == "tool":
+                    answered[messages[j].get("tool_call_id")] = messages[j]
+                    j += 1
+                kept_calls = [tc for tc in msg["tool_calls"] if tc.get("id") in answered]
+                new_msg = {k: v for k, v in msg.items() if k != "tool_calls"}
+                if kept_calls:
+                    new_msg["tool_calls"] = kept_calls
+                if not new_msg.get("content") and not new_msg.get("tool_calls"):
+                    new_msg["content"] = "[interrupted before tool call]"
+                fixed_messages.append(new_msg)
+                # Emit only the tool replies that actually answer this message.
+                for tid in ids:
+                    if tid in answered:
+                        fixed_messages.append(answered[tid])
+                i = j
             elif role == "tool":
-                tc_id = msg.get("tool_call_id")
-                if tc_id and tc_id in active_tool_call_ids:
-                    # This tool message is valid; keep as tool.
-                    active_tool_call_ids.discard(tc_id)
-                    fixed_messages.append(msg)
-                else:
-                    # Orphaned tool message – convert to user
-                    new_msg = {
-                        "role": "user",
-                        "content": f"[Tool result from {msg.get('name', 'unknown')}]:\n{msg.get('content', '')}"
-                    }
-                    fixed_messages.append(new_msg)
+                # Orphaned tool message – convert to a user message.
+                fixed_messages.append({
+                    "role": "user",
+                    "content": f"[Tool result from {msg.get('name', 'unknown')}]:\n{msg.get('content', '')}",
+                })
+                i += 1
             else:
                 fixed_messages.append(msg)
+                i += 1
 
         # Validate the sequence (now should pass)
         try:
@@ -336,7 +352,7 @@ class Agent:
         Returns final response text.
         reasoning_callback: async callable(thought_text) for live reasoning output.
         """
-        max_iterations = 7
+        max_iterations = 50
         iteration = 0
         enable_reasoning = bool(reasoning_callback)
 
