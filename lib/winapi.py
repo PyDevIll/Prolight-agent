@@ -41,6 +41,13 @@ DWMWA_CLOAKED = 14
 
 MF_BYPOSITION = 0x00000400
 
+# Accessibility / UI Automation activation (used to wake Chromium's a11y tree).
+WM_GETOBJECT = 0x003D
+UiaRootObjectId = -25  # 0xFFFFFFE7
+OBJID_CLIENT = -4  # 0xFFFFFFFC
+SMTO_ABORTIFHUNG = 0x0002
+SMTO_BLOCK = 0x0001
+
 
 # ── Structs ───────────────────────────────────────────────────────────────
 class RECT(ctypes.Structure):
@@ -144,6 +151,11 @@ user32.SetActiveWindow.argtypes = [wintypes.HWND]
 user32.SetActiveWindow.restype = wintypes.HWND
 user32.GetGUIThreadInfo.argtypes = [wintypes.DWORD, ctypes.POINTER(GUITHREADINFO)]
 user32.GetGUIThreadInfo.restype = wintypes.BOOL
+user32.SendMessageTimeoutW.argtypes = [
+    wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM,
+    wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_size_t),
+]
+user32.SendMessageTimeoutW.restype = wintypes.LPARAM
 
 user32.GetWindowDC.argtypes = [wintypes.HWND]
 user32.GetWindowDC.restype = wintypes.HDC
@@ -440,6 +452,22 @@ def list_windows(visible_only: bool = True, titled_only: bool = True) -> list[di
     return results
 
 
+def find_child_by_class(hwnd: int, class_substring: str) -> Optional[int]:
+    """Return the first descendant window whose class contains ``class_substring``."""
+    needle = (class_substring or "").lower()
+    found = {"hwnd": 0}
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def _cb(child, _lparam):
+        if needle and needle in (get_class_name(child) or "").lower():
+            found["hwnd"] = int(child)
+            return False
+        return True
+
+    user32.EnumChildWindows(hwnd, _cb, 0)
+    return found["hwnd"] or None
+
+
 # ── Focus ─────────────────────────────────────────────────────────────────
 def _get_window_thread_id(hwnd: int) -> int:
     """Thread id that owns a window (0 on failure)."""
@@ -553,6 +581,77 @@ def focus_window(hwnd: int, retries: int = 3) -> dict:
         "title": get_window_text(hwnd),
         "method": "attach-thread-input",
     }
+
+
+def verify_keyboard(hwnd: int, probe_key: str = "shift", settle: float = 0.05,
+                    retries: int = 3) -> dict:
+    """Focus ``hwnd`` and probe that keyboard input is actually delivered.
+
+    Injects a *benign* key (a modifier by default — no text, no command) and
+    re-reads the target thread's keyboard focus. Returns ``keyboard_delivery``:
+
+      * ``verified``   — target still holds keyboard focus after an injected key;
+      * ``focus_lost`` — it lost focus (keys would go elsewhere);
+      * ``unverified`` — focus could not be determined / injection failed.
+
+    Note: this proves focus *survives* an injected key, not that a specific
+    application received it — pair it with a UIA/pixel check for the latter.
+    """
+    focus = focus_window(hwnd, retries=retries)
+    result = {
+        **focus,
+        "mouse_ok": bool(focus.get("ok")),
+        "keyboard_ok": focus.get("keyboard_focus") is True,
+        "probe_key": probe_key,
+    }
+    if not focus.get("ok") or focus.get("keyboard_focus") is False:
+        result["keyboard_delivery"] = "focus_lost" if focus.get("ok") else "unverified"
+        return result
+
+    target_thread = focus.get("target_thread") or _get_window_thread_id(hwnd)
+    before = get_thread_focus_info(target_thread)
+    try:
+        from lib import input_backend as ib  # lazy: avoid import cycle
+
+        ib.key_stroke(probe_key)
+    except Exception as e:
+        result["keyboard_delivery"] = "unverified"
+        result["error"] = str(e)
+        return result
+
+    time.sleep(settle)
+    after = get_thread_focus_info(target_thread)
+    result["focus_before"] = before.get("hwnd_focus", 0)
+    result["focus_after"] = after.get("hwnd_focus", 0)
+    result["caret_hwnd"] = after.get("hwnd_caret", 0)
+    if after.get("ok") and after.get("hwnd_focus") and \
+            _get_window_thread_id(after["hwnd_focus"]) == target_thread:
+        result["keyboard_delivery"] = "verified"
+    else:
+        result["keyboard_delivery"] = "focus_lost"
+    return result
+
+
+# ── Accessibility / UIA activation ────────────────────────────────────────
+def send_getobject(hwnd: int, objid: int = UiaRootObjectId, timeout_ms: int = 1000) -> dict:
+    """Send WM_GETOBJECT to a window to wake its accessibility provider.
+
+    Chromium/Electron keep their accessibility tree off until an assistive
+    client requests the UIA root object; sending this can turn it on at runtime.
+    Returns ``{ok, hwnd, objid}``.
+    """
+    hwnd = int(hwnd)
+    if not is_window(hwnd):
+        return {"ok": False, "error": f"Invalid window handle: {hwnd}"}
+    out = ctypes.c_size_t(0)
+    try:
+        ret = user32.SendMessageTimeoutW(
+            hwnd, WM_GETOBJECT, 0, int(objid),
+            SMTO_ABORTIFHUNG | SMTO_BLOCK, int(timeout_ms), ctypes.byref(out),
+        )
+        return {"ok": True, "hwnd": hwnd, "objid": int(objid), "result": int(ret or 0)}
+    except Exception as e:  # pragma: no cover - env-dependent
+        return {"ok": False, "hwnd": hwnd, "objid": int(objid), "error": str(e)}
 
 
 # ── Capture ───────────────────────────────────────────────────────────────

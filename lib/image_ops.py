@@ -366,6 +366,118 @@ def find_template(
     return results
 
 
+def _clamp_box(box, w: int, h: int) -> tuple[int, int, int, int]:
+    x0, y0, x1, y1 = (int(round(v)) for v in box)
+    x0 = max(0, min(w - 1, x0))
+    y0 = max(0, min(h - 1, y0))
+    x1 = max(x0 + 1, min(w, x1))
+    y1 = max(y0 + 1, min(h, y1))
+    return x0, y0, x1, y1
+
+
+def _pick_component(labels, n, box, w, h, min_area):
+    """Choose the component that best matches ``box``: prefer those not touching
+    the search-window border (the background usually does), then the largest
+    overlap with the approximate box, then the nearest centroid."""
+    x0, y0, x1, y1 = box
+    boxmask = np.zeros((h, w), dtype=bool)
+    boxmask[y0:y1, x0:x1] = True
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    best, best_key = None, None
+    for i, sl in enumerate(ndimage.find_objects(labels), start=1):
+        comp = labels[sl] == i
+        area = int(comp.sum())
+        if area < min_area:
+            continue
+        ys, xs = sl
+        touches = xs.start <= 0 or ys.start <= 0 or xs.stop >= w or ys.stop >= h
+        overlap = int(np.logical_and(comp, boxmask[sl]).sum())
+        rcx, rcy = (xs.start + xs.stop) / 2.0, (ys.start + ys.stop) / 2.0
+        d = (rcx - cx) ** 2 + (rcy - cy) ** 2
+        key = (1 if touches else 0, -overlap, d)
+        if best_key is None or key < best_key:
+            best_key, best = key, (xs.start, ys.start, xs.stop, ys.stop)
+    return best
+
+
+def _snap_color(arr, box, tolerance, min_area) -> Optional[tuple[int, int, int, int]]:
+    """Tight bbox of the component nearest ``box`` whose colour matches the
+    median colour of the box's *central* region (avoids sampling background)."""
+    x0, y0, x1, y1 = box
+    h, w = arr.shape[:2]
+    cx0 = x0 + (x1 - x0) // 5
+    cx1 = x1 - (x1 - x0) // 5
+    cy0 = y0 + (y1 - y0) // 5
+    cy1 = y1 - (y1 - y0) // 5
+    patch = arr[cy0:cy1, cx0:cx1].reshape(-1, 3)
+    if patch.size == 0:
+        return None
+    color = np.median(patch, axis=0)
+    tol = int(tolerance) if tolerance is not None else 40
+    mask = np.max(np.abs(arr - color), axis=2) <= tol
+    if not mask.any():
+        return None
+    labels, n = ndimage.label(mask)
+    if n == 0:
+        return None
+    return _pick_component(labels, n, box, w, h, min_area)
+
+
+def _snap_edge(arr, box) -> Optional[tuple[int, int, int, int]]:
+    """Tight bbox of the edge component overlapping ``box`` most (fallback when
+    the element is multi-coloured / has no dominant fill)."""
+    x0, y0, x1, y1 = box
+    gray = (arr[:, :, 0] * 299 + arr[:, :, 1] * 587 + arr[:, :, 2] * 114) // 1000
+    gy, gx = np.gradient(gray.astype(np.float32))
+    mag = np.hypot(gx, gy)
+    thr = float(mag.mean() + 2.0 * mag.std())
+    mask = mag > thr
+    if not mask.any():
+        return None
+    mask = ndimage.binary_dilation(mask, iterations=1)
+    labels, n = ndimage.label(mask)
+    if n == 0:
+        return None
+    return _pick_component(labels, n, box, arr.shape[1], arr.shape[0], 1)
+
+
+def snap_box(
+    img: Image.Image,
+    approx_bbox,
+    pad: int = 8,
+    method: str = "auto",
+    tolerance: Optional[int] = None,
+    min_area: int = 4,
+) -> list[int]:
+    """Snap an approximate box to the tight bounding box of the element.
+
+    The vision model is good at *fractions* but not at exact pixels, so a
+    fractional box is converted to an approximate pixel box and then refined
+    here deterministically: search a padded window around ``approx_bbox`` and
+    return the tight box of the colour/edge component nearest it.
+
+    ``method``: "auto" (colour then edge), "color", or "edge". Returns
+    ``[x0,y0,x1,y1]`` in ``img`` coordinates; falls back to the clamped
+    approximate box when nothing can be snapped.
+    """
+    rgb = img.convert("RGB")
+    W, H = rgb.size
+    ax0, ay0, ax1, ay1 = _clamp_box(approx_bbox, W, H)
+    wx0, wy0 = max(0, ax0 - int(pad)), max(0, ay0 - int(pad))
+    wx1, wy1 = min(W, ax1 + int(pad)), min(H, ay1 + int(pad))
+    arr = np.asarray(rgb.crop((wx0, wy0, wx1, wy1)), dtype=np.int16)
+    box = (ax0 - wx0, ay0 - wy0, ax1 - wx0, ay1 - wy0)
+
+    snapped = None
+    if method in ("auto", "color"):
+        snapped = _snap_color(arr, box, tolerance, min_area)
+    if snapped is None and method in ("auto", "edge"):
+        snapped = _snap_edge(arr, box)
+    if snapped is None:
+        return [ax0, ay0, ax1, ay1]
+    return [snapped[0] + wx0, snapped[1] + wy0, snapped[2] + wx0, snapped[3] + wy0]
+
+
 def pixel_diff(a: Image.Image, b: Image.Image, threshold: int = 12) -> dict:
     """Cheap perceptual change detection between two images (no LLM call).
 

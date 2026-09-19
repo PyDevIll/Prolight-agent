@@ -16,7 +16,9 @@ whole windows: cheaper (far fewer image tokens) and far more accurate.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from typing import Optional
 
 from loguru import logger
@@ -52,6 +54,36 @@ def _with_size(query: str, width: int, height: int) -> str:
         f"IMAGE SIZE: exactly {width}x{height} pixels (origin at top-left, 0,0).\n"
         f"{query}"
     )
+
+
+def _locate_prompt(query: str, width: int, height: int) -> str:
+    """Ask for element boxes as FRACTIONS (the model is reliable at those)."""
+    return (
+        f"IMAGE SIZE: exactly {width}x{height} pixels (origin at top-left, 0,0).\n"
+        f"{query}\n\n"
+        "Return ONLY minified JSON of exactly this shape:\n"
+        '{"elements":[{"label":"short name","box":[x0,y0,x1,y1],"confidence":0.0}]}\n'
+        "box MUST be FRACTIONS of the image, each 0.0-1.0, origin top-left; "
+        "never pixels. Include only the elements asked for. No prose, no code fence."
+    )
+
+
+def _extract_json(text: Optional[str]):
+    """Best-effort JSON object extraction from a model answer."""
+    if not text:
+        return None
+    t = re.sub(r"```(?:json)?", "", text, flags=re.I).strip().strip("`").strip()
+    try:
+        return json.loads(t)
+    except Exception:
+        pass
+    m = re.search(r"\{.*\}", t, re.S)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            return None
+    return None
 
 
 class VisionAgent:
@@ -103,7 +135,7 @@ class VisionAgent:
         return await analyze_messages(messages, max_tokens=max_tokens, client=self._client)
 
     async def ask_once(self, image, query: str, max_tokens: int = 1024) -> str:
-        """One-shot analysis with no history (used by win_see / vision_analyze)."""
+        """One-shot analysis with no history (used by win_snapshot / vision_look)."""
         data_url, w, h = encode_image(image)
         messages = [
             {"role": "system", "content": self.system_prompt},
@@ -215,6 +247,94 @@ class VisionAgent:
             "path": str(path), "image_size": {"width": w, "height": h},
             "screen_rect": meta["screen_rect"],
             "answer": answer, "context": self.context.stats(),
+        }
+
+    async def locate(
+        self,
+        *,
+        rect=None,
+        hwnd: Optional[int] = None,
+        control: Optional[dict] = None,
+        query: str = "Locate the main interactive elements.",
+        label: str = "",
+        source: str = "auto",
+        pad: int = 0,
+        scale: float = 1.0,
+        max_dim: int = 1600,
+        snap: bool = True,
+        max_tokens: int = 1024,
+    ) -> dict:
+        """Return APPROXIMATE element boxes, then snap them to exact pixels.
+
+        The model is asked for boxes as *fractions* of the crop (which it does
+        reliably); code converts them to pixels and refines each with
+        ``image_ops.snap_box``. Boxes are hints — exact geometry still comes
+        from UIA/OCR/colour search. Returns ``elements`` with ``box_frac``,
+        ``image_bbox``, ``snapped_bbox`` and ``screen_*`` coordinates.
+        """
+        region = await self._resolve_region(rect=rect, hwnd=hwnd, control=control)
+        if not region:
+            return {"ok": False, "error": "no region resolved (need rect, hwnd or control+hwnd)"}
+        rect_s, hwnd_s = region["rect"], region.get("hwnd")
+        src = self._pick_source(source, hwnd_s, rect_s)
+        try:
+            img, meta = image_ops.grab_region_with_meta(
+                rect_s, source=src, hwnd=hwnd_s, pad=pad, scale=scale, max_dim=max_dim
+            )
+        except Exception as e:
+            return {"ok": False, "error": f"capture failed: {e}"}
+
+        path = image_ops.save(img, label or "locate")
+        data_url, w, h = encode_image(img, max_dim=max_dim)
+        parts = [
+            {"type": "text", "text": _locate_prompt(query, w, h)},
+            {"type": "image_url", "image_url": {"url": data_url}},
+        ]
+        try:
+            answer = await self._complete(parts, max_tokens=max_tokens)
+        except Exception as e:
+            return {"ok": False, "error": f"vision call failed: {e}", "path": str(path)}
+
+        data = _extract_json(answer)
+        if not isinstance(data, dict) or not isinstance(data.get("elements"), list):
+            return {"ok": False, "error": "could not parse element boxes",
+                    "answer": answer, "path": str(path)}
+
+        elements = []
+        for el in data["elements"][:32]:
+            box = el.get("box") if isinstance(el, dict) else None
+            if not (isinstance(box, (list, tuple)) and len(box) == 4):
+                continue
+            try:
+                fx0, fy0, fx1, fy1 = (float(v) for v in box)
+            except (TypeError, ValueError):
+                continue
+            if max(abs(fx0), abs(fy0), abs(fx1), abs(fy1)) > 1.5:  # 0..100 given
+                fx0, fy0, fx1, fy1 = fx0 / 100, fy0 / 100, fx1 / 100, fy1 / 100
+            fx0, fx1 = sorted((max(0.0, min(1.0, fx0)), max(0.0, min(1.0, fx1))))
+            fy0, fy1 = sorted((max(0.0, min(1.0, fy0)), max(0.0, min(1.0, fy1))))
+            ix0, iy0, ix1, iy1 = fx0 * w, fy0 * h, fx1 * w, fy1 * h
+            approx = [int(round(ix0)), int(round(iy0)), int(round(ix1)), int(round(iy1))]
+            snapped = image_ops.snap_box(img, approx) if snap else approx
+            sx0, sy0 = image_ops.map_image_point(meta, snapped[0], snapped[1])
+            sx1, sy1 = image_ops.map_image_point(meta, snapped[2], snapped[3])
+            elements.append({
+                "label": (el.get("label") or "") if isinstance(el, dict) else "",
+                "box_frac": [round(fx0, 4), round(fy0, 4), round(fx1, 4), round(fy1, 4)],
+                "image_bbox": approx,
+                "snapped_bbox": snapped,
+                "screen_bbox": [sx0, sy0, sx1, sy1],
+                "screen_center": [(sx0 + sx1) // 2, (sy0 + sy1) // 2],
+                "confidence": el.get("confidence") if isinstance(el, dict) else None,
+                "snapped": snapped != approx,
+            })
+
+        logger.info(f"vision locate[{label or '-'}] {w}x{h}: {len(elements)} element(s)")
+        return {
+            "ok": True, "label": label, "source": src, "path": str(path),
+            "image_size": {"width": w, "height": h},
+            "screen_rect": meta["screen_rect"],
+            "elements": elements, "answer": answer,
         }
 
     async def compare(self, label: str, query: str = "", max_tokens: int = 1024) -> dict:

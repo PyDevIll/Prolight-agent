@@ -9,6 +9,7 @@ import json
 from loguru import logger
 
 from lib import input_backend as ib
+from lib import window_state
 
 
 def _dump(obj) -> str:
@@ -35,18 +36,28 @@ async def mouse_moveto(x: int, y: int, duration: float = 0.25) -> str:
 async def mouse_click(
     x: int = None,
     y: int = None,
+    id: str = "",
     button: str = "left",
     clicks: int = 1,
     duration: float = 0.2,
 ) -> str:
-    """Click a mouse button, optionally moving to (x, y) first.
+    """Click a mouse button, optionally moving to a target first.
 
     Args:
         x, y: target coordinates. If omitted, clicks at the current position.
+        id: element id from win_snapshot (clicks its centre; overrides x/y).
         button: left | right | middle | x1 | x2.
         clicks: 1 = single, 2 = double.
-        duration: movement time when x/y are given.
+        duration: movement time when a target is given.
     """
+    if id:
+        el = window_state.resolve_id(id)
+        if el is None:
+            return _dump({"ok": False, "error": f"unknown element id {id!r} — call win_snapshot first"})
+        center = el.center()
+        if not center:
+            return _dump({"ok": False, "error": f"element {id} has no rectangle", "element": el.to_dict()})
+        x, y = center
     if x is not None and y is not None:
         await ib.move_to(x, y, duration=duration)
     ib.click(button=button, clicks=clicks)
@@ -115,13 +126,14 @@ TOOL_DEFINITIONS = [
     (
         "mouse_click",
         mouse_click,
-        "Click a mouse button, optionally moving to (x, y) first. "
-        "Focus the target window with win_focus before clicking.",
+        "Click a mouse button, optionally moving to (x, y) or an element id "
+        "first. Focus the target window with win_focus before clicking.",
         {
             "type": "object",
             "properties": {
                 "x": {"type": "integer", "description": "Target X (omit to click in place)"},
                 "y": {"type": "integer", "description": "Target Y (omit to click in place)"},
+                "id": {"type": "string", "description": "Element id from win_snapshot (clicks its centre)"},
                 "button": {"type": "string", "description": "left | right | middle | x1 | x2 (default left)"},
                 "clicks": {"type": "integer", "description": "1 = single, 2 = double (default 1)"},
                 "duration": {"type": "number", "description": "Movement time when x/y given (default 0.2)"},

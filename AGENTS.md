@@ -36,17 +36,20 @@ Windows desktop GUI-automation agent ("ProLight"). Console-only, **non-admin**, 
 - `reload_tools` hot-reloads the submodules and the package `__init__.py`, so a new module added to that import list is picked up without a restart.
 - Per-tool timeout 120 s (`agent.py:141`); agent loop caps at 7 iterations (`agent.py:339`).
 - When you add a tool, document it in `system_prompts/desktop.md` / `tools_guidelines.md` (both are injected into the LLM).
-- UI Automation tools (`builtin_tools/uia_tools.py`, backed by `lib/ui_tree.py`): `win_enum_controls`, `win_get_control_rects`, `win_find_controls`, `win_wait_for`, `win_click_control` (preferred click), `win_set_control_text` (UIA ValuePattern). UIA runs on one dedicated STA worker thread (`lib/ui_tree._run`); `sys.coinit_flags = 2` must be set before comtypes/pywinauto are imported.
-- Deterministic geometry (`builtin_tools/search_tools.py`, backed by `lib/image_ops.py` using numpy + scipy): `screen_find_color` (numpy colour mask + `scipy.ndimage.label`), `screen_find_template` (FFT SSD). For custom-drawn UIs (Paint) where UIA is empty and vision coordinates are unreliable. Return screen coordinates.
-- Focus/input reliability: `win_focus` returns `keyboard_focus` (verified via `GetGUIThreadInfo`, not just foreground); `win_ensure_foreground`/`win_get_foreground` added. `keybd_*` accept an optional `hwnd` and refuse loudly if it lacks keyboard focus (SendInput fails silently otherwise).
+- **Perception is snapshot/diff** (`builtin_tools/win_tools.py` + `lib/window_state.py`): `win_snapshot` returns identity, focus, menu, UIA controls and OCR text in ONE call, each with an id (`c7`/`t3`/`m2`); `win_changes` returns only the delta (UIA/OCR/pixel) and can `wait_for` an element. Ids are stable across snapshots (one-to-one identity matching). Act by id via `win_click_control(id=...)` / `win_set_control_text(id=...)` / `mouse_click(id=...)`. `lib/window_state.py` also does the Chromium a11y auto-enable (via `winapi.send_getobject`, `WM_GETOBJECT`/`UiaRootObjectId`).
+- OCR (`lib/ocr.py`): Windows.Media.Ocr via modular PyWinRT (`winrt-*` packages in `requirements.txt`), run on a dedicated worker thread (own asyncio loop, like `ui_tree`). `recognize_auto` tries every installed language and keeps the richest (needed for Cyrillic). Windows OCR packs: `en-US`, `ru`.
+- UI Automation actions (`builtin_tools/uia_tools.py`, backed by `lib/ui_tree.py`): `win_click_control`, `win_set_control_text`. Discovery moved into `win_snapshot` (the old `win_enum_controls`/`win_get_control_rects`/`win_find_controls`/`win_wait_for` tools were removed). UIA runs on one dedicated STA worker thread (`lib/ui_tree._run`); `sys.coinit_flags = 2` must be set before comtypes/pywinauto are imported.
+- Deterministic locator (`builtin_tools/search_tools.py`, backed by `lib/image_ops.py` using numpy + scipy): `screen_find(kind="color"|"template"|"text")` — colour blobs (`scipy.ndimage.label`), FFT template match, and OCR text search. Replaces `screen_find_color`/`screen_find_template`. Returns screen coordinates. `image_ops.snap_box` refines a fraction/approximate box to exact pixels (used by `vision_locate`).
+- Focus/input reliability: `win_focus` returns `keyboard_focus` (via `GetGUIThreadInfo`); `win_ensure_foreground(probe=true)` injects a benign key and returns `keyboard_delivery` (`winapi.verify_keyboard`), distinguishing `mouse_ok` from `keyboard_ok`. `keybd_*` accept an optional `hwnd` and refuse loudly if it lacks keyboard focus (SendInput fails silently otherwise). `win_get_foreground` was removed (the snapshot's `focus` covers it).
 
 ## Vision sub-agent
 
 - `lib/vision_agent.py` (`VisionAgent`, singleton via `get_vision_agent()`) is a **separate** assistant on the **HELPER** key (`DEEPSEEK_API_KEY_VISION` → `_HELPER` → `DEEPSEEK_API_KEY`) with its **own** message history, so screenshots never touch the main agent's context or prefix cache.
 - It looks at small regions/controls, not whole windows: `look()` crops via `lib/image_ops.py` (mss screen grab, or PrintWindow when occluded), saves to `data/vision/`, and remembers labelled *watches*.
-- `compare(label)` re-captures and sends BEFORE+AFTER images in one request; `changed(label)` is a pixel-diff with **no** LLM call — call it first to avoid a needless vision request.
+- `compare(label)` re-captures and sends BEFORE+AFTER images in one request; `changed(label)` is a pixel-diff with **no** LLM call — call it first (via `vision_compare(pixel_only=true)`) to avoid a needless vision request.
+- `locate()` asks the model for element boxes as **fractions** of the crop (the model is reliable at fractions, not pixels), then converts to pixels and refines with `image_ops.snap_box`. Boxes are hints — exact geometry still comes from UIA/OCR/colour.
 - `lib/visual_context_manager.py` (`VisualContext`) keeps only the last `keep_images` turns as images; older turns become text and are summarised into `memory` once they exceed `max_turns`/`max_text_tokens`.
-- Tools: `vision_look`, `vision_compare`, `vision_changed`, `vision_watches`, `vision_forget`. `win_see` and `vision_analyze` route through the same agent via its one-shot `ask_once` (so all live vision uses the HELPER key).
+- Tools: `vision_look` (also handles an image `path`), `vision_compare` (with `pixel_only`), `vision_forget` (with `list_only`). `win_snapshot(vision_query=...)` routes through the same agent (so all live vision uses the HELPER key).
 - Do NOT call `lib/vision_client.analyze_image`/its shared `_get_client()` directly: that default client uses the **MASTERMIND** key (`vision_client.py:32`) and is a dead path. `vision_agent` always passes its own HELPER client into `analyze_messages`.
 
 ## Windows / input gotchas (hard-won)
@@ -55,14 +58,14 @@ Windows desktop GUI-automation agent ("ProLight"). Console-only, **non-admin**, 
 - Call `force_utf8_console()` (`lib.console`) before the first print/log; Cyrillic titles/answers otherwise crash or mojibake. `main.py`/`app.py` already do — do the same in any new entrypoint.
 - SendInput only reaches the **foreground** window: `win_focus(hwnd)` and verify before mouse/keyboard input.
 - **UIPI**: a non-admin process cannot send input to elevated (admin) windows — those targets are off-limits.
-- UIA discovery (`win_*control*`) is the reliable locator for native Win32 controls; browsers/Electron/1C/custom-drawn UIs often expose an empty/poor tree — fall back to vision + `mouse_click`.
+- UIA discovery is the reliable locator for native Win32 controls; browsers/Electron/1C/custom-drawn UIs often expose an empty/poor tree — `win_snapshot` reports `uia.coverage` and falls back to OCR text / `screen_find`.
 - `win_send_message` (PostMessage WM_*) is a fallback for standard Win32 controls only; browsers/Electron/1C/custom UIs ignore it.
-- Menu bars are NON-client area, so `GetClientRect` excludes them — use `win_get_menu_rects` to click menus, not client-relative offsets.
+- Menu bars are NON-client area, so `GetClientRect` excludes them — `win_snapshot` includes menu items (id `m*`) with screen rects; click those, not client-relative offsets.
 - `winapi.capture_window` returns `None` if both PrintWindow flags fail (never an uninitialized bitmap).
 
 ## Learning DB
 
-- `interaction_guides/<app>.md` and `workflows/<task>.md` are the agent's learned-fact databases (see `system_prompts/learning.md`). Neither dir exists yet (Phase 4) and nothing reads/writes them; neither would be gitignored.
+- `interaction_guides/<app>.md` and `workflows/<task>.md` are the agent's learned-fact databases (see `system_prompts/learning.md`). `interaction_guides/` exists (`chrome.md`, `max.md`, `mspaint.md`, written by the agent); `workflows/` does not yet exist. Neither is gitignored.
 
 ## Git hygiene
 
@@ -72,7 +75,7 @@ Windows desktop GUI-automation agent ("ProLight"). Console-only, **non-admin**, 
 
 ## Phase / roadmap
 
-- Phases 0–3 done (scaffold, perception, actuation, UIA control discovery) plus the vision sub-agent (region/control change-verification); next is Phase 4 (learning: guides/workflows DB + `components/tracker.py`).
-- Roadmap: `DEVLOG.txt` + `GENERATED_PLAN.txt`; requirements: `APP_SPECS_OUTLINES.txt`; real-world friction log: `ISSUES_AND_IMPROVEMENT_IDEAS.txt` (Phase 3 addresses its "No OCR / UI Automation" and pixel-coordinate items).
-- Planned but not yet created: `interaction_guides/`, `workflows/`, `builtin_tools/app_tools.py`, `learning_tools.py`, `components/tracker.py`, `heartbeat.py`. `pynput` and `pyperclip` are in `requirements.txt` but not imported anywhere yet.
+- Phases 0–3 done (scaffold, perception, actuation, UIA control discovery) plus the vision sub-agent (region/control change-verification) and the perception consolidation (snapshot/diff + OCR locator, 28 tools); next is Phase 4 (learning: guides/workflows DB + `components/tracker.py`).
+- Roadmap: `DEVLOG.txt` + `GENERATED_PLAN.txt`; requirements: `APP_SPECS_OUTLINES.txt`; real-world friction log: `ISSUES_AND_IMPROVEMENT_IDEAS.txt`.
+- Planned but not yet created: `workflows/`, `builtin_tools/app_tools.py`, `learning_tools.py`, `components/tracker.py`, `heartbeat.py`. `pynput` is in `requirements.txt` but not imported anywhere yet.
 - `reference_sources/` (gitignored) holds the verbatim iNysha copies and `UniClicker_sample_source/` (Delphi input-capture reference) — reference only, don't edit.

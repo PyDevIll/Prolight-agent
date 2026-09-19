@@ -5,13 +5,13 @@ All vision analysis goes through the dedicated vision sub-agent
 own small, image-aware context, so screenshots never pollute the main agent's
 context.
 
-Tools:
-  - vision_analyze : analyze an existing image file (one-shot)
-  - vision_look    : capture a region/control and analyze it (remembers it)
-  - vision_compare : re-capture a watched region and compare BEFORE vs AFTER
-  - vision_changed : cheap pixel-level "did it change?" check (no LLM)
-  - vision_watches : list watched regions
-  - vision_forget  : drop one watch (or all)
+Perception is normally done with ``win_snapshot``; these tools are for a
+targeted semantic look or a structured element search:
+  - vision_look    : capture a region/control/file and describe it (optional
+                     ``structured`` boxes); remembers it when labelled.
+  - vision_compare : re-capture a watched region (BEFORE vs AFTER), or a cheap
+                     pixel-only change check.
+  - vision_forget  : list or drop watched regions.
 """
 
 import json
@@ -24,19 +24,6 @@ from lib.vision_agent import get_vision_agent
 
 def _dump(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2, default=str)
-
-
-async def vision_analyze(image_path: str, query: str) -> str:
-    """Analyze an existing image file with the vision sub-agent (one-shot)."""
-    path = Path(image_path)
-    if not path.exists():
-        return _dump({"ok": False, "error": f"Image not found: {image_path}"})
-    try:
-        answer = await get_vision_agent().ask_once(path, query)
-    except Exception as e:
-        logger.error(f"vision_analyze failed: {e}")
-        return _dump({"ok": False, "error": str(e)})
-    return _dump({"ok": True, "path": str(path), "answer": answer})
 
 
 async def vision_look(
@@ -52,15 +39,33 @@ async def vision_look(
     pad: int = 0,
     scale: float = 1.0,
     remember: bool = True,
+    path: str = "",
+    structured: bool = False,
 ) -> str:
-    """Capture a region (or a control) and analyze it with the vision sub-agent.
+    """Look at a region/control (or an image file) and describe it.
 
-    Give either ``rect`` [left, top, right, bottom] (screen pixels), or a window
-    ``hwnd``, or a control (``control_name``/``control_type``/``automation_id``/
-    ``class_name`` + ``hwnd``). With a ``label`` the region is *watched*, so you
-    can later call ``vision_compare`` or ``vision_changed`` on it.
+    Give a ``rect`` [left, top, right, bottom] (screen pixels), a window
+    ``hwnd``, a control (``control_name``/``control_type``/``automation_id``/
+    ``class_name`` + ``hwnd``), or a ``path`` to an existing image. With a
+    ``label`` the region is *watched* for ``vision_compare``.
+
+    With ``structured=true`` it returns approximate element boxes (fractions of
+    the crop, snapped to pixels) instead of prose — useful to locate an element
+    the deterministic tools cannot (then verify/refine).
     """
     va = get_vision_agent()
+
+    if path:
+        p = Path(path)
+        if not p.exists():
+            return _dump({"ok": False, "error": f"Image not found: {path}"})
+        try:
+            answer = await va.ask_once(p, query)
+        except Exception as e:
+            logger.error(f"vision_look(path) failed: {e}")
+            return _dump({"ok": False, "error": str(e)})
+        return _dump({"ok": True, "path": str(p), "answer": answer})
+
     control = None
     if control_name or control_type or automation_id or class_name:
         if hwnd is None:
@@ -72,82 +77,65 @@ async def vision_look(
             "class_name": class_name,
         }
     try:
-        result = await va.look(
-            rect=rect, hwnd=hwnd, control=control, query=query, label=label,
-            source=source, pad=pad, scale=scale, remember=remember,
-        )
+        if structured:
+            result = await va.locate(
+                rect=rect, hwnd=hwnd, control=control, query=query, label=label,
+                source=source, pad=pad, scale=scale,
+            )
+        else:
+            result = await va.look(
+                rect=rect, hwnd=hwnd, control=control, query=query, label=label,
+                source=source, pad=pad, scale=scale, remember=remember,
+            )
     except Exception as e:
         logger.error(f"vision_look failed: {e}")
         return _dump({"ok": False, "error": str(e)})
     return _dump(result)
 
 
-async def vision_compare(label: str, query: str = "") -> str:
-    """Re-capture a watched region and ask the vision model to compare it with
-    the previous observation (BEFORE vs AFTER)."""
+async def vision_compare(
+    label: str, query: str = "", pixel_only: bool = False, threshold: int = 12
+) -> str:
+    """Re-capture a watched region and compare it with the previous look.
+
+    With ``pixel_only=true`` it does a cheap pixel diff (no vision call) — use
+    it first to decide whether a vision comparison is needed.
+    """
+    va = get_vision_agent()
     try:
-        result = await get_vision_agent().compare(label, query)
+        if pixel_only:
+            result = await va.changed(label, threshold=threshold)
+        else:
+            result = await va.compare(label, query)
     except Exception as e:
         logger.error(f"vision_compare failed: {e}")
         return _dump({"ok": False, "error": str(e)})
     return _dump(result)
 
 
-async def vision_changed(label: str, threshold: int = 12) -> str:
-    """Cheap pixel-level check: has the watched region changed since the last
-    look? No LLM call — use it to avoid an unnecessary vision request."""
-    try:
-        result = await get_vision_agent().changed(label, threshold=threshold)
-    except Exception as e:
-        logger.error(f"vision_changed failed: {e}")
-        return _dump({"ok": False, "error": str(e)})
-    return _dump(result)
-
-
-async def vision_watches() -> str:
-    """List the currently watched regions (label, rect, last answer)."""
-    return _dump({"ok": True, "watches": get_vision_agent().watches_list()})
-
-
-async def vision_forget(label: str = "") -> str:
-    """Drop a watched region by label (or all watches when label is empty)."""
-    dropped = get_vision_agent().forget(label or None)
+async def vision_forget(label: str = "", list_only: bool = False) -> str:
+    """List watched regions, or drop one (empty label = drop all)."""
+    va = get_vision_agent()
+    if list_only:
+        return _dump({"ok": True, "watches": va.watches_list()})
+    dropped = va.forget(label or None)
     return _dump({"ok": True, "dropped": dropped, "label": label or None})
 
 
 TOOL_DEFINITIONS = [
     (
-        "vision_analyze",
-        vision_analyze,
-        "Analyze an existing image file with the vision model (one-shot). "
-        "(To capture and analyze a window in one step, use win_see.)",
-        {
-            "type": "object",
-            "properties": {
-                "image_path": {"type": "string", "description": "Path to the image file"},
-                "query": {"type": "string", "description": "Specific question about the image"},
-            },
-            "required": ["image_path", "query"],
-        },
-    ),
-    (
         "vision_look",
         vision_look,
-        "Look at a small region of the screen and describe it: either a rect "
-        "[left,top,right,bottom], a window hwnd, or a specific control "
-        "(control_name/control_type/automation_id/class_name + hwnd). Cropping to "
-        "the region of interest is far more accurate than looking at a whole "
-        "window. With a `label` the region is remembered for vision_compare/"
-        "vision_changed. Use it to verify a checkbox, a selection, a field value, etc.",
+        "Look at a small region/control (or an image file) and describe it with "
+        "the vision model. Prefer a tight `rect` or a control (hwnd + "
+        "control_type/name); use `scale` to zoom a tiny control. With a `label` "
+        "it is watched for vision_compare. Set structured=true to get approximate "
+        "element boxes (fractions of the crop, snapped to pixels).",
         {
             "type": "object",
             "properties": {
                 "hwnd": {"type": "integer", "description": "Window handle (for control lookup or whole-window look)"},
-                "rect": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "description": "Screen rect [left, top, right, bottom] in physical pixels",
-                },
+                "rect": {"type": "array", "items": {"type": "integer"}, "description": "Screen rect [left, top, right, bottom]"},
                 "control_name": {"type": "string", "description": "Control name substring (needs hwnd)"},
                 "control_type": {"type": "string", "description": "Control type substring, e.g. CheckBox (needs hwnd)"},
                 "automation_id": {"type": "string", "description": "Control automation id substring (needs hwnd)"},
@@ -158,6 +146,8 @@ TOOL_DEFINITIONS = [
                 "pad": {"type": "integer", "description": "Extra pixels around the region (default 0)"},
                 "scale": {"type": "number", "description": "Zoom factor for tiny controls, e.g. 3.0 (default 1.0)"},
                 "remember": {"type": "boolean", "description": "Add this observation to visual context (default true)"},
+                "path": {"type": "string", "description": "Analyze an existing image file instead of capturing"},
+                "structured": {"type": "boolean", "description": "Return approximate element boxes (fractions), not prose"},
             },
             "required": [],
         },
@@ -165,46 +155,29 @@ TOOL_DEFINITIONS = [
     (
         "vision_compare",
         vision_compare,
-        "Re-capture a labelled region (from vision_look) and ask the vision model "
-        "what changed since the previous look (BEFORE vs AFTER). Use after a click "
-        "or typing to confirm the effect (ticked checkbox, selection, new value).",
+        "Re-capture a labelled region (from vision_look) and ask what changed "
+        "(BEFORE vs AFTER). Set pixel_only=true for a cheap pixel diff with no "
+        "vision call.",
         {
             "type": "object",
             "properties": {
                 "label": {"type": "string", "description": "Label of a region previously passed to vision_look"},
                 "query": {"type": "string", "description": "Optional custom comparison question"},
+                "pixel_only": {"type": "boolean", "description": "Cheap pixel diff only, no vision call (default false)"},
+                "threshold": {"type": "integer", "description": "Per-pixel threshold for pixel_only (default 12)"},
             },
             "required": ["label"],
         },
-    ),
-    (
-        "vision_changed",
-        vision_changed,
-        "Cheap pixel-level check of whether a watched region changed since the last "
-        "look. No vision call — use it to decide whether vision_compare is needed.",
-        {
-            "type": "object",
-            "properties": {
-                "label": {"type": "string", "description": "Label of a watched region"},
-                "threshold": {"type": "integer", "description": "Per-pixel difference threshold (default 12)"},
-            },
-            "required": ["label"],
-        },
-    ),
-    (
-        "vision_watches",
-        vision_watches,
-        "List the currently watched regions (label, rect, last answer).",
-        {"type": "object", "properties": {}, "required": []},
     ),
     (
         "vision_forget",
         vision_forget,
-        "Drop a watched region by label (or all watches when label is empty).",
+        "List watched regions (list_only=true) or drop one by label (empty = all).",
         {
             "type": "object",
             "properties": {
-                "label": {"type": "string", "description": "Label to forget (empty = forget all)"},
+                "label": {"type": "string", "description": "Label to forget (empty = all)"},
+                "list_only": {"type": "boolean", "description": "Just list the watches"},
             },
             "required": [],
         },
