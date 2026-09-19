@@ -135,9 +135,23 @@ def store(state: WindowState, label: str = "") -> None:
 
 
 def get(label: str = "") -> Optional[WindowState]:
-    if label:
-        return _snapshots.get(label)
-    return _current
+    """Resolve a snapshot by ``label`` (or the most recent when empty).
+
+    The auto-generated ``snapshot_id`` (``"s1"``) returned by ``win_snapshot``
+    is also accepted as a handle, so the agent can feed it straight back into
+    ``win_changes(label=...)`` without inventing its own label.
+    """
+    if not label:
+        return _current
+    st = _snapshots.get(label)
+    if st is not None:
+        return st
+    if _current is not None and _current.snapshot_id == label:
+        return _current
+    for st in _snapshots.values():
+        if st.snapshot_id == label:
+            return st
+    return None
 
 
 def resolve_id(element_id: str, label: str = "") -> Optional[Element]:

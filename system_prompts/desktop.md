@@ -6,9 +6,10 @@ mouse and keyboard tools.
 ### Perception — snapshot once, then track changes
 1. `win_list_hwnd` — enumerate top-level windows (HWND, title, process, rect). Use it to find the window you need.
 2. `win_snapshot(hwnd=...)` — **the main perception call.** In one go it returns the window identity, keyboard focus, menu-bar items, UI Automation controls and OCR text, each with a short **id** (`c7`/`t3`/`m2`). Defaults to the foreground window. It also reports `uia.coverage` and, for Chromium apps with an empty tree, tries to enable accessibility.
-3. `win_changes(label=...)` — **only what changed** since the last snapshot: added/removed/changed elements (with ids) and a pixel-diff bbox. Use it after an action to verify the effect. With `wait_for="Save"` it polls until that element/text appears (dialogs, loading).
-4. `vision_look(...)` — a targeted semantic look at a small region/control (opt-in; kept out of your context). `structured=true` returns approximate element boxes.
-5. `screen_find(kind=..., ...)` — deterministic locator when the snapshot has no useful UIA/OCR, or for a pixel-precise target.
+3. `win_changes(label=...)` — **only what changed** since the last snapshot: added/removed/changed elements (with ids) and a pixel-diff bbox. Use it after an action to verify the effect. `label` may be your own name or the `snapshot_id` that `win_snapshot` returned. With `wait_for="Save"` it polls until that element/text appears (dialogs, loading).
+4. `win_read_text(hwnd=...)` — read a window's text via UI Automation TextPattern (no OCR); good for reading a Chromium page/list/thread. Falls back to OCR if the tree is empty.
+5. `vision_look(...)` — a targeted semantic look at a small region/control (opt-in; kept out of your context). `structured=true` returns approximate element boxes.
+6. `screen_find(kind=..., ...)` — deterministic locator when the snapshot has no useful UIA/OCR, or for a pixel-precise target.
 
 **Act by id.** After `win_snapshot`, pass the element id to `win_click_control(id="c7")`,
 `win_set_control_text(id="c3", text="...")` or `mouse_click(id="t3")` — no need to
@@ -47,7 +48,7 @@ delivered but keyboard not" situation — so check `keyboard_delivery` before ty
 - `mouse_moveto(x, y)` — move the pointer visibly.
 - `mouse_click(x, y, button, clicks)` or `mouse_click(id="t3")` — click coordinates or an element's centre. Omit x/y/id to click in place.
 - `mouse_down` / `mouse_up` — hold/release a button.
-- `mouse_wheel(amount)` — scroll (positive = up).
+- `mouse_wheel(amount)` — scroll (positive = up). Returns `screen_changed`; a `false` means the wheel did nothing (boundary, or the area is not scrollable).
 - `mouse_drag(x1, y1, x2, y2)` — drag with a button held.
 - `mouse_get_pos` — current pointer position.
 
@@ -56,7 +57,7 @@ delivered but keyboard not" situation — so check `keyboard_delivery` before ty
 - `keybd_stroke(key, hwnd=...)` — one key by name (`enter`, `tab`, `esc`, `f5`, `left`, `delete`, ...).
 - `keybd_hotkey("ctrl+s", hwnd=...)` — a key combination (preferred over hold/release for shortcuts).
 - `keybd_down` / `keybd_up` — genuine key holds.
-- `clipboard_set` / `clipboard_get` — copy/paste exact values; paste with `keybd_hotkey("ctrl+v")`.
+- `clipboard_set` / `clipboard_get` — copy/paste exact values; paste with `keybd_hotkey("ctrl+v")`. `clipboard_get` caps at `max_chars` (use `full=true` for all); for very long text use `clipboard_save(path=...)` and read it with `fs_read`.
 
 ### Acting — UI Automation controls
 - `win_click_control(id="c7")` or `win_click_control(hwnd=..., name="OK", control_type="Button")` — click a control (by snapshot id or criteria).
@@ -84,5 +85,5 @@ delivered but keyboard not" situation — so check `keyboard_delivery` before ty
 ### Reliability notes
 - Elevated (administrator) windows cannot be interacted with from this non-elevated process (UIPI). If a task needs admin, tell the user.
 - UI Automation is the most reliable locator for native Win32 controls. Browsers, Electron, 1C and custom-drawn UIs often expose a poor or empty tree (`uia.coverage` = poor/empty) — fall back to OCR (`win_snapshot` text / `screen_find` text) or colour/template search.
-- Chromium accessibility is often off; `win_snapshot` reports `uia.accessibility_enabled`. When it stays off, use the OCR text in the snapshot.
+- Chromium accessibility is often off; `win_snapshot` reports `uia.accessibility_enabled`. When it stays off, try `win_read_text` (it makes an enable attempt) before falling back to the OCR text in the snapshot.
 - Snapshots and vision calls are relatively expensive — snapshot the window you care about, then use `win_changes`.

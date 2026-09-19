@@ -4,11 +4,14 @@ All movement is visible to the user. Clicks/wheel are injected via SendInput,
 so the target window must be foreground (call win_focus first).
 """
 
+import asyncio
 import json
 
 from loguru import logger
 
+from lib import image_ops
 from lib import input_backend as ib
+from lib import winapi
 from lib import window_state
 
 
@@ -78,16 +81,34 @@ async def mouse_up(button: str = "left") -> str:
     return _dump({"ok": True, "button": button, "state": "up"})
 
 
-async def mouse_wheel(amount: int, horizontal: bool = False) -> str:
-    """Scroll the mouse wheel.
+async def mouse_wheel(amount: int, horizontal: bool = False, verify: bool = True) -> str:
+    """Scroll the mouse wheel and report whether anything changed.
 
     Args:
         amount: number of notches; positive = up (or right if horizontal).
         horizontal: scroll horizontally instead of vertically.
+        verify: capture the foreground window before/after and report
+            ``screen_changed`` — a ``false`` means the wheel did nothing
+            (already at the boundary, or the area is not scrollable).
     """
+    hwnd = winapi.get_foreground_window() or 0
+    before = None
+    if verify and hwnd:
+        try:
+            before = image_ops.downscale(image_ops.grab_window(hwnd), 480)
+        except Exception:
+            before = None
     ib.wheel(amount, horizontal=horizontal)
     logger.debug(f"mouse_wheel amount={amount} horizontal={horizontal}")
-    return _dump({"ok": True, "amount": amount, "horizontal": horizontal})
+    result = {"ok": True, "amount": amount, "horizontal": horizontal}
+    if before is not None:
+        await asyncio.sleep(0.35)
+        try:
+            after = image_ops.downscale(image_ops.grab_window(hwnd), 480)
+            result["screen_changed"] = bool(image_ops.pixel_diff(before, after).get("changed"))
+        except Exception:
+            result["screen_changed"] = None
+    return _dump(result)
 
 
 async def mouse_drag(
@@ -164,12 +185,14 @@ TOOL_DEFINITIONS = [
     (
         "mouse_wheel",
         mouse_wheel,
-        "Scroll the mouse wheel up/down (or left/right).",
+        "Scroll the mouse wheel up/down (or left/right). Returns screen_changed "
+        "(false = the wheel did nothing, e.g. at the boundary).",
         {
             "type": "object",
             "properties": {
                 "amount": {"type": "integer", "description": "Notches; positive = up/right"},
                 "horizontal": {"type": "boolean", "description": "Scroll horizontally (default false)"},
+                "verify": {"type": "boolean", "description": "Report whether the screen changed (default true)"},
             },
             "required": ["amount"],
         },

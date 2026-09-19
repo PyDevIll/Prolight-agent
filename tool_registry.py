@@ -13,6 +13,9 @@ from dataclasses import dataclass, field
 from loguru import logger
 
 
+DEFAULT_TOOL_TIMEOUT = 120.0
+
+
 @dataclass
 class ToolDef:
     """Definition of a registered tool."""
@@ -21,6 +24,7 @@ class ToolDef:
     func: Callable
     parameters: dict = field(default_factory=dict)
     module_name: str = ""
+    timeout: float = DEFAULT_TOOL_TIMEOUT
 
 
 class ToolRegistry:
@@ -89,6 +93,18 @@ class ToolRegistry:
 
     def get_tool(self, name: str) -> Optional[ToolDef]:
         return self._tools.get(name)
+
+    def set_timeout(self, name: str, seconds: float) -> None:
+        """Override the per-tool execution timeout (e.g. a blocking ask_user)."""
+        tdef = self._tools.get(name)
+        if tdef:
+            tdef.timeout = float(seconds)
+
+    def get_timeout(self, name: str, default: float = DEFAULT_TOOL_TIMEOUT) -> float:
+        tdef = self._tools.get(name)
+        if tdef and tdef.timeout:
+            return float(tdef.timeout)
+        return float(default)
 
 
     def get_openai_tools(self) -> list[dict]:

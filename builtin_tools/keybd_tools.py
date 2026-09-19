@@ -6,6 +6,8 @@ target window to be foreground (call win_focus first).
 """
 
 import json
+import time
+from pathlib import Path
 from typing import Optional
 
 import pyperclip
@@ -13,6 +15,8 @@ from loguru import logger
 
 from lib import input_backend as ib
 from lib import winapi
+
+CLIPBOARD_DIR = Path(__file__).resolve().parent.parent / "data" / "clipboard"
 
 
 def _dump(obj) -> str:
@@ -24,25 +28,36 @@ def _focus_guard(hwnd: Optional[int]) -> Optional[dict]:
 
     Returns an error dict (and the caller must NOT send) when the window is not
     foreground or its thread has no keyboard focus — otherwise SendInput
-    silently delivers nothing. Returns None when it is safe to proceed.
+    silently delivers nothing. A transient window can steal focus between calls,
+    so focus is re-attempted once before failing. Returns None when safe.
     """
     if hwnd is None:
         return None
-    res = winapi.focus_window(int(hwnd))
+
+    def _attempt():
+        res = winapi.focus_window(int(hwnd))
+        ok = bool(res.get("ok")) and res.get("keyboard_focus") is not False
+        return ok, res
+
+    ok, res = _attempt()
+    if not ok:
+        # a transient window may have grabbed focus; re-focus once and retry
+        time.sleep(0.15)
+        ok, res = _attempt()
+    if ok:
+        return None
     if not res.get("ok"):
         return {
             "ok": False,
             "error": "target window is not foreground — keyboard not sent",
             "focus": res,
         }
-    if res.get("keyboard_focus") is False:
-        return {
-            "ok": False,
-            "error": "target window has no keyboard focus — keyboard not sent "
-                     "(try win_ensure_foreground with click_title=true)",
-            "focus": res,
-        }
-    return None
+    return {
+        "ok": False,
+        "error": "target window has no keyboard focus — keyboard not sent "
+                 "(try win_ensure_foreground with click_title=true)",
+        "focus": res,
+    }
 
 
 async def keybd_type(text: str, interval: float = 0.01, hwnd: Optional[int] = None) -> str:
@@ -113,13 +128,55 @@ async def clipboard_set(text: str) -> str:
     return _dump({"ok": True, "characters": len(text)})
 
 
-async def clipboard_get() -> str:
-    """Read the current clipboard text."""
+async def clipboard_get(max_chars: int = 20000, full: bool = False) -> str:
+    """Read the current clipboard text.
+
+    Args:
+        max_chars: cap on returned characters (default 20000).
+        full: return the entire text, ignoring ``max_chars`` (for bulk reads;
+            prefer ``clipboard_save`` when the text is very long).
+    """
     try:
         text = pyperclip.paste()
     except Exception as e:
         return _dump({"ok": False, "error": str(e)})
-    return _dump({"ok": True, "text": text})
+    text = text or ""
+    truncated = False
+    if not full and max_chars and len(text) > int(max_chars):
+        text = text[: int(max_chars)]
+        truncated = True
+    result = {"ok": True, "text": text, "characters": len(text)}
+    if truncated:
+        result["truncated"] = True
+        result["hint"] = "clipboard_save(path=...) writes the full text to a file (then fs_read)"
+    return _dump(result)
+
+
+async def clipboard_save(path: str = "", max_chars: int = 0) -> str:
+    """Write the raw clipboard text to a file (for bulk reads too long for chat).
+
+    Args:
+        path: target file (default: data/clipboard/clipboard_<timestamp>.txt).
+        max_chars: cap written characters (0 = no limit).
+    """
+    try:
+        text = pyperclip.paste() or ""
+    except Exception as e:
+        return _dump({"ok": False, "error": str(e)})
+    if max_chars and len(text) > int(max_chars):
+        text = text[: int(max_chars)]
+    if path:
+        p = Path(path)
+    else:
+        CLIPBOARD_DIR.mkdir(parents=True, exist_ok=True)
+        p = CLIPBOARD_DIR / f"clipboard_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+    except Exception as e:
+        return _dump({"ok": False, "error": str(e)})
+    logger.info(f"clipboard_save: {len(text)} chars -> {p}")
+    return _dump({"ok": True, "path": str(p), "characters": len(text)})
 
 
 TOOL_DEFINITIONS = [
@@ -203,8 +260,30 @@ TOOL_DEFINITIONS = [
     (
         "clipboard_get",
         clipboard_get,
-        "Read the current clipboard text.",
-        {"type": "object", "properties": {}, "required": []},
+        "Read the current clipboard text (capped at max_chars unless full=true). "
+        "For very long text use clipboard_save and read the file with fs_read.",
+        {
+            "type": "object",
+            "properties": {
+                "max_chars": {"type": "integer", "description": "Cap on returned characters (default 20000)"},
+                "full": {"type": "boolean", "description": "Return the entire text, ignoring max_chars"},
+            },
+            "required": [],
+        },
+    ),
+    (
+        "clipboard_save",
+        clipboard_save,
+        "Write the raw clipboard text to a file (default data/clipboard/), then "
+        "read it with fs_read. Use for long bulk-copied text.",
+        {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Target file (default data/clipboard/clipboard_<ts>.txt)"},
+                "max_chars": {"type": "integer", "description": "Cap written characters (0 = no limit)"},
+            },
+            "required": [],
+        },
     ),
 ]
 

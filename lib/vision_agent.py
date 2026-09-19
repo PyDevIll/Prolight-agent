@@ -84,8 +84,26 @@ def _extract_json(text: Optional[str]):
     return None
 
 
+def _degenerate_snap(approx, snapped) -> bool:
+    """True when a snapped box is unusable (collapsed sliver or far too small).
+
+    ``snap_box`` can latch onto a tiny sub-region of a multi-coloured element;
+    in that case the model's fractional box is the better answer.
+    """
+    try:
+        aw, ah = approx[2] - approx[0], approx[3] - approx[1]
+        sw, sh = snapped[2] - snapped[0], snapped[3] - snapped[1]
+    except Exception:
+        return True
+    if sw <= 2 or sh <= 2:
+        return True
+    if aw > 0 and ah > 0 and (sw * sh) < 0.25 * (aw * ah):
+        return True
+    return False
+
+
 class VisionAgent:
-    """A small, image-aware assistant on its own key and context."""
+    """A small, image-aware assistant on its own API key (one-shot calls)."""
 
     def __init__(
         self,
@@ -187,6 +205,15 @@ class VisionAgent:
         max_tokens: int = 1024,
     ) -> dict:
         """Capture a region (or control) and ask the vision model about it."""
+        # Reuse a previously watched region when only its label is given.
+        if rect is None and hwnd is None and control is None and label and label in self.watches:
+            w = self.watches[label]
+            rect = w.get("rect")
+            hwnd = w.get("hwnd")
+            source = w.get("source", source)
+            pad = w.get("pad", pad)
+            scale = w.get("scale", scale)
+            max_dim = w.get("max_dim", max_dim)
         region = await self._resolve_region(rect=rect, hwnd=hwnd, control=control)
         if not region:
             return {"ok": False, "error": "no region resolved (need rect, hwnd or control+hwnd)"}
@@ -293,6 +320,10 @@ class VisionAgent:
             ix0, iy0, ix1, iy1 = fx0 * w, fy0 * h, fx1 * w, fy1 * h
             approx = [int(round(ix0)), int(round(iy0)), int(round(ix1)), int(round(iy1))]
             snapped = image_ops.snap_box(img, approx) if snap else approx
+            # Reject a degenerate snap (a collapsed sliver or one much smaller
+            # than the model's box) — the model's fraction box is more reliable.
+            if snap and _degenerate_snap(approx, snapped):
+                snapped = approx
             sx0, sy0 = image_ops.map_image_point(meta, snapped[0], snapped[1])
             sx1, sy1 = image_ops.map_image_point(meta, snapped[2], snapped[3])
             elements.append({

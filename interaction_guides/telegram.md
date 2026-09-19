@@ -53,6 +53,7 @@
 - **Navigation gotcha:** only some channels have comments enabled — channels without a
   discussion group show NO footer bar (e.g. grетранслятор, Гифки Долбоёба, Пикабу).
 
+- Bulk-read a thread (verified): click a message (or the message list) so the list has focus, then Ctrl+A selects all messages and Ctrl+C copies them to the clipboard as plain text (author + text + links). It captures only what is currently loaded in the DOM (a window around the viewport, ~40 messages) plus the pinned parent post and reaction counters — scroll to load more, then copy again. If the list is NOT focused, Ctrl+A/Ctrl+C copy nothing (empty clipboard).
 ## Shortcuts (VERIFIED)
 - `Ctrl+L` — browser omnibox (use it to confirm this is Telegram, not MAX).
 - `Esc` — closes the search AND the comments/thread view (returns to the chat). ✔
@@ -71,5 +72,6 @@
 - OCR garbles Cyrillic sometimes — cross-check with a tight screenshot.
 - The window title changes with the open chat (e.g. `Delphi & Lazarus - Google Chrome`).
 
+- Comment bodies can contain hyperlinks and forwarded channel posts. A stray click on a comment body can navigate the tab away (e.g. to cloud.mail.ru) or open another chat/profile (a long weird name like "Тауматафакатангиханга…" is a user in the linked discussion group). Do NOT click inside comment bodies: only scroll, and use the round floating down-arrow button (bottom-right, with an unread-count badge) to jump straight to the LAST comment. The comments thread keeps the parent post pinned at the top; comments below; composer at the bottom; Esc returns to the channel.
 ## Last verified
 - 2026-09-20 (search focus, Esc close, comments open/close, scroll-to-newest, layout)

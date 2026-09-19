@@ -79,4 +79,7 @@ TOOL_DEFINITIONS = [
 def register_all(registry):
     for name, func, desc, params in TOOL_DEFINITIONS:
         registry.register_function(func, name, desc, params)
+    # ask_user blocks on a human; give it a longer cap than the 120s default
+    # so its documented 300s timeout is actually honoured.
+    registry.set_timeout("ask_user", 600.0)
     logger.info(f"Registered {len(TOOL_DEFINITIONS)} meta tool(s)")

@@ -20,6 +20,9 @@ from loguru import logger
 from lib import winapi
 from lib import window_state as ws
 from lib import input_backend as ib
+from lib import ui_tree
+from lib import image_ops
+from lib import ocr
 
 
 def _dump(obj) -> str:
@@ -27,6 +30,7 @@ def _dump(obj) -> str:
 
 
 _INCLUDE = {"uia", "text", "menu", "focus", "image"}
+_CHROMIUM_PROC = ("chrome", "msedge", "brave", "opera", "vivaldi", "chromium")
 
 
 def _state_to_dict(state: ws.WindowState, vision: Optional[dict] = None) -> dict:
@@ -277,6 +281,81 @@ async def win_changes(
     return _dump(result)
 
 
+async def win_read_text(
+    hwnd: int = None,
+    max_chars: int = 20000,
+    lang: str = "auto",
+    ocr_fallback: bool = True,
+) -> str:
+    """Read a window's text content via UIA TextPattern (no OCR).
+
+    For Chromium/Electron windows this returns the page's accessible text — use
+    it to read a long list or thread instead of OCR or Ctrl+A/Ctrl+C. If the
+    accessibility tree is empty it makes one enable attempt, and (unless
+    ``ocr_fallback=false``) falls back to OCR of the window image.
+
+    Args:
+        hwnd: window to read (default: foreground).
+        max_chars: cap on returned characters (default 20000).
+        lang: OCR language for the fallback ("auto" tries all installed).
+        ocr_fallback: allow OCR when UIA yields no text.
+    """
+    hwnd = int(hwnd) if hwnd is not None else (winapi.get_foreground_window() or 0)
+    if not hwnd:
+        return _dump({"ok": False, "error": "no window (foreground unknown)"})
+
+    info = winapi.get_window_info(hwnd) or {}
+    proc = (info.get("process") or "").lower()
+    cls = (info.get("class") or "").lower()
+    is_chromium = any(b in proc for b in _CHROMIUM_PROC) or "chrome_widgetwin" in cls
+
+    try:
+        result = await ui_tree.get_text(hwnd, max_chars=max_chars)
+    except Exception as e:
+        result = {"ok": False, "error": str(e), "text": ""}
+
+    if not (result.get("text") or "").strip() and is_chromium:
+        winapi.send_getobject(hwnd)
+        child = winapi.find_child_by_class(hwnd, "Chrome_RenderWidgetHostHWND")
+        if child:
+            winapi.send_getobject(child)
+        await asyncio.sleep(1.0)
+        try:
+            result = await ui_tree.get_text(hwnd, max_chars=max_chars)
+        except Exception as e:
+            result = {"ok": False, "error": str(e), "text": ""}
+
+    method = "uia_text"
+    text = result.get("text") or ""
+    if not text.strip() and ocr_fallback:
+        try:
+            img = image_ops.grab_window(hwnd)
+        except Exception:
+            img = None
+        if img is not None:
+            try:
+                r = await ocr.recognize_auto(img) if lang in (None, "", "auto") \
+                    else await ocr.recognize(img, lang=lang)
+            except Exception as e:
+                r = None
+                logger.warning(f"win_read_text OCR fallback failed: {e}")
+            if r:
+                text = "\n".join(l.get("text", "") for l in r.get("lines", [])).strip()
+                method = "ocr"
+
+    out = {
+        "ok": True, "method": method, "hwnd": hwnd,
+        "text": text, "characters": len(text),
+        "truncated": bool(result.get("truncated")) and method == "uia_text",
+    }
+    if method == "uia_text":
+        out["blocks"] = result.get("blocks")
+    if not text.strip():
+        out["note"] = "no text found (accessibility may be off; try vision_look/OCR)"
+    logger.info(f"win_read_text[{hwnd}]: {method}, {len(text)} chars")
+    return _dump(out)
+
+
 async def win_focus(hwnd: int) -> str:
     """Bring a window to the foreground and focus it.
 
@@ -433,6 +512,23 @@ TOOL_DEFINITIONS = [
                 "max_controls": {"type": "integer", "description": "Cap on UIA controls (default 60)"},
                 "max_text": {"type": "integer", "description": "Cap on OCR text lines (default 60)"},
                 "probe": {"type": "boolean", "description": "Actively verify keyboard delivery"},
+            },
+            "required": [],
+        },
+    ),
+    (
+        "win_read_text",
+        win_read_text,
+        "Read a window's text content via UI Automation TextPattern (no OCR) — "
+        "e.g. a Chromium page/list/thread. Falls back to OCR if accessibility is "
+        "empty. Prefer this over Ctrl+A/Ctrl+C or OCR for reading long text.",
+        {
+            "type": "object",
+            "properties": {
+                "hwnd": {"type": "integer", "description": "Window to read (default: foreground)"},
+                "max_chars": {"type": "integer", "description": "Cap on returned characters (default 20000)"},
+                "lang": {"type": "string", "description": "OCR language for the fallback (default auto)"},
+                "ocr_fallback": {"type": "boolean", "description": "Allow OCR when UIA yields no text (default true)"},
             },
             "required": [],
         },

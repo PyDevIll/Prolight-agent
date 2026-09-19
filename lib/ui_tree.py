@@ -230,6 +230,38 @@ def _set_text_sync(hwnd, name, control_type, automation_id, class_name, text, ma
         return {"ok": False, "error": f"cannot set text: {e}", "control": d}
 
 
+def _get_text_sync(hwnd, max_depth, max_controls, max_chars):
+    """Dump a window's accessible text (UIA TextPattern first, then names/values).
+
+    For Chromium documents ``TextPattern.GetText`` returns the whole page text,
+    so this reads a long list/thread without OCR.
+    """
+    root = _root(hwnd)
+    raw = []
+    for el, depth in _walk(root, int(max_depth), int(max_controls)):
+        txt = ""
+        try:
+            txt = el.iface_text.GetText(-1) or ""
+        except Exception:
+            txt = ""
+        if not txt.strip():
+            d = _control_dict(el, depth)
+            txt = d.get("value") or d.get("name") or ""
+        if txt and txt.strip():
+            raw.append(txt.strip())
+    # Drop exact duplicates and any text already contained in a longer one
+    # (a document's text includes its children's), preserving tree order.
+    uniq = list(dict.fromkeys(raw))
+    kept = [t for t in uniq if not any(t != o and t in o for o in uniq)]
+    text = "\n".join(kept)
+    truncated = False
+    if max_chars and len(text) > int(max_chars):
+        text = text[: int(max_chars)]
+        truncated = True
+    return {"ok": True, "text": text, "characters": len(text),
+            "truncated": truncated, "blocks": len(kept)}
+
+
 def _element_at_point_sync(x, y):
     """UIA element under a screen point (for click labelling)."""
     _ensure_com()
@@ -264,6 +296,22 @@ async def enum_controls(
 ) -> list[dict]:
     return await _run(
         _enum_sync, int(hwnd), max_depth, max_controls, control_type, rects_only, timeout=timeout
+    )
+
+
+async def get_text(
+    hwnd: int,
+    max_depth: int = DEFAULT_MAX_DEPTH + 1,
+    max_controls: int = DEFAULT_MAX_CONTROLS,
+    max_chars: int = 20000,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> dict:
+    """Return a window's accessible text via UIA TextPattern (no OCR).
+
+    ``{"ok", "text", "characters", "truncated", "blocks"}``.
+    """
+    return await _run(
+        _get_text_sync, int(hwnd), max_depth, max_controls, max_chars, timeout=timeout
     )
 
 

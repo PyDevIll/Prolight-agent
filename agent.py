@@ -135,18 +135,19 @@ class Agent:
             }
 
         logger.info(f"Tool: {func_name}({json.dumps(args, ensure_ascii=False)[:200]})")
+        tool_timeout = registry.get_timeout(func_name)
         try:
             result = await asyncio.wait_for(
                 registry.call_tool(func_name, **args),
-                timeout=120.0  # 2-minute timeout per tool
+                timeout=tool_timeout,  # per-tool timeout (default 120s)
             )
         except asyncio.TimeoutError:
-            logger.error(f"Tool '{func_name}' timed out after 120s")
+            logger.error(f"Tool '{func_name}' timed out after {tool_timeout:.0f}s")
             return {
                 "tool_call_id": tool_call.id,
                 "role": "tool",
                 "name": func_name,
-                "content": f"Error: tool '{func_name}' timed out (>120s). "
+                "content": f"Error: tool '{func_name}' timed out (>{tool_timeout:.0f}s). "
                            f"Try narrowing the search scope.",
             }
 
