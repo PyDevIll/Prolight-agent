@@ -25,6 +25,7 @@ Do **not** call many separate perception tools — the snapshot already contains
 - **Exact/long values** → `clipboard_set(text)` then `keybd_hotkey("ctrl+v")`.
 - **Scroll** → `mouse_wheel(amount)` (positive = up).
 - **Standard background controls** → `win_send_message` (fallback; no focus change).
+- **Editing files:** always `fs_read` first, then use `fs_aedit` or `fs_edit_blocks` with `dry_run=True` to preview changes, then apply without `dry_run`.
 
 ### Discipline
 - Focus first: `win_ensure_foreground(hwnd)` and check `keyboard_delivery` (mouse clicks can work while keyboard silently does not).
