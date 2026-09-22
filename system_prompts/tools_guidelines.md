@@ -28,7 +28,8 @@ Do **not** call many separate perception tools — the snapshot already contains
 - **Standard background controls** → `win_send_message` (fallback; no focus change).
 - **Learn an app** → `load_interaction_guide(hwnd=...)`; if missing, discover (`win_snapshot` + `vision_look` + `screen_probe(hover)`) and `save_interaction_guide`.
 - **Discover what a control does** → `screen_probe(x, y, action="hover")` (safe pixel diff); for a click use `action="click", undo_hotkey="ctrl+z"`; use `action="scroll"` to test if an area is scrollable.
-- **Ask the user** → `ask_user(question, options=[...])` before an uncertain or state-changing step.
+- **Ask the user** → `ask_user(question, options=[...])` before an uncertain or state-changing step. To ask *about* a screen area, pass `highlight=[...]` (+ `highlight_label=...`) so it stays outlined until they answer.
+- **Show the user a screen area** → `highlight_area(regions=[...], label="...")` draws labelled box(es) on screen (visible to the user, never in your captures); clear with `highlight_clear(token)`.
 - **Find/follow a procedure** → `find_workflow(query=...)`, then `load_workflow(name)`; save with `save_workflow`.
 - **Learn from the user** → `start_learning_session(label=...)`, let them perform the task, then `stop_learning_session()` and summarize into a workflow.
 - **Editing files:** always `fs_read` first, then use `fs_aedit` or `fs_edit_blocks` with `dry_run=True` to preview changes, then apply without `dry_run`.

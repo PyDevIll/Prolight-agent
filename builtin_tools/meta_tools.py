@@ -9,6 +9,7 @@ from datetime import datetime
 
 from loguru import logger
 from tool_registry import get_registry
+from lib import overlay
 
 
 async def ping() -> str:
@@ -33,7 +34,8 @@ async def reload_tools() -> str:
     return f"Reloaded {count} module(s).\n\n{tool_list}"
 
 
-async def ask_user(question: str, options: list = None, timeout: float = 300.0) -> str:
+async def ask_user(question: str, options: list = None, timeout: float = 300.0,
+                   highlight: list = None, highlight_label: str = "") -> str:
     """Ask the user a question on the console and wait for their answer.
 
     Use it before an uncertain or state-changing step (e.g. before clicking a
@@ -43,10 +45,22 @@ async def ask_user(question: str, options: list = None, timeout: float = 300.0) 
         question: the question to ask.
         options: optional list of suggested answers to show.
         timeout: seconds to wait (default 300).
+        highlight: optional screen region(s) to outline while asking, so the user
+            sees exactly what the question is about (e.g. "is this the right
+            area?"). Each region is [left,top,right,bottom] or an object with
+            rect/hwnd/point(+radius)/bbox.
+        highlight_label: optional label chip drawn on the highlighted region(s).
     """
     from app import ask_user_question
 
-    answer = await ask_user_question(question, options=options, timeout=timeout)
+    token = None
+    if highlight:
+        token = overlay.highlight(highlight, persist=True, label=(highlight_label or None))
+    try:
+        answer = await ask_user_question(question, options=options, timeout=timeout)
+    finally:
+        if token is not None:
+            overlay.clear_highlights(token)
     if answer is None:
         return json.dumps({"ok": False, "error": "no answer (timed out or no console)"}, ensure_ascii=False)
     return json.dumps({"ok": True, "answer": answer}, ensure_ascii=False)
@@ -59,12 +73,34 @@ TOOL_DEFINITIONS = [
         "required": [],
     }),
     ("ask_user", ask_user, "Ask the user a question and wait for their answer (for "
-     "uncertain or state-changing steps). Blocks until they reply.", {
+     "uncertain or state-changing steps). Blocks until they reply. Optionally "
+     "highlight the screen region(s) the question is about.", {
         "type": "object",
         "properties": {
             "question": {"type": "string", "description": "The question to ask"},
             "options": {"type": "array", "items": {"type": "string"}, "description": "Suggested answers to show"},
             "timeout": {"type": "number", "description": "Seconds to wait (default 300)"},
+            "highlight": {
+                "type": "array",
+                "description": "Screen region(s) to outline while asking: [left,top,right,bottom] "
+                               "or {rect|hwnd|point(+radius)|bbox} objects",
+                "items": {
+                    "oneOf": [
+                        {"type": "array", "items": {"type": "integer"}, "minItems": 4, "maxItems": 4},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "rect": {"type": "array", "items": {"type": "integer"}},
+                                "hwnd": {"type": "integer"},
+                                "point": {"type": "array", "items": {"type": "integer"}},
+                                "radius": {"type": "integer"},
+                                "label": {"type": "string"},
+                            },
+                        },
+                    ]
+                },
+            },
+            "highlight_label": {"type": "string", "description": "Label drawn on the highlighted region(s)"},
         },
         "required": ["question"],
     }),

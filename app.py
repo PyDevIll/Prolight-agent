@@ -11,6 +11,7 @@ from agent import Agent
 from builtin_tools import register_all as register_builtin_tools
 from tool_registry import get_registry
 from lib.console import force_utf8_console
+from lib import overlay
 
 # Data directory (screenshots, logs, context saves)
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -42,6 +43,8 @@ async def ask_user_question(question: str, options=None, timeout: float = 300.0)
     loop = asyncio.get_running_loop()
     fut: asyncio.Future = loop.create_future()
     _pending_question = fut
+    overlay.set_status("waiting for you", "waiting")
+    overlay.notify("Waiting for your input", "waiting", sticky=True)
     print("\n[AGENT ASKS] " + str(question), flush=True)
     if options:
         print("  options: " + " | ".join(str(o) for o in options), flush=True)
@@ -53,6 +56,8 @@ async def ask_user_question(question: str, options=None, timeout: float = 300.0)
     finally:
         if _pending_question is fut:
             _pending_question = None
+        overlay.clear_toast()
+        overlay.set_status("thinking", "thinking")
 
 
 # ---- Worker coroutine (processes requests sequentially) ----
@@ -170,6 +175,22 @@ async def start_app() -> None:
     registry = get_registry()
     register_builtin_tools(registry)
     logger.info(f"Registered {len(registry.tool_names)} tools: {registry.tool_names}")
+
+    # On-screen overlay: visible to the user but excluded from screen captures.
+    logger.info(
+        f"Overlay {'enabled' if overlay.is_enabled() else 'disabled'} "
+        f"(set {overlay.OVERLAY_ENV}=0 to disable)"
+    )
+    _orig_call_tool = registry.call_tool
+
+    async def _call_tool_with_overlay(tool_name, **kwargs):
+        overlay.set_status(f"tool: {tool_name}", "tool")
+        try:
+            return await _orig_call_tool(tool_name, **kwargs)
+        finally:
+            overlay.set_status("thinking", "thinking")
+
+    registry.call_tool = _call_tool_with_overlay
 
     # Helper agent for context compression
     helper_agent = Agent(

@@ -24,7 +24,17 @@ import time
 from ctypes import wintypes
 from typing import Iterable, Optional
 
+from lib import overlay
+
 user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+
+def _overlay(fn, *args, **kwargs) -> None:
+    """Fire-and-forget overlay feedback; never let it break input injection."""
+    try:
+        fn(*args, **kwargs)
+    except Exception:
+        pass
 
 # ── SendInput structures ──────────────────────────────────────────────────
 ULONG_PTR = ctypes.c_size_t
@@ -228,11 +238,15 @@ async def move_to(x: int, y: int, duration: float = 0.25, steps: Optional[int] =
 def mouse_down(button: str = "left") -> None:
     down, _up, data = _BUTTONS[_norm_button(button)]
     _mouse_event(down, data=data)
+    pos = get_cursor_pos()
+    _overlay(overlay.flash_click, pos["x"], pos["y"], button, 0.5)
 
 
 def mouse_up(button: str = "left") -> None:
     _down, up, data = _BUTTONS[_norm_button(button)]
     _mouse_event(up, data=data)
+    pos = get_cursor_pos()
+    _overlay(overlay.flash_click, pos["x"], pos["y"], button, 0.5)
 
 
 def click(button: str = "left", clicks: int = 1, interval: float = 0.05) -> None:
@@ -242,12 +256,15 @@ def click(button: str = "left", clicks: int = 1, interval: float = 0.05) -> None
         _mouse_event(up, data=data)
         if i < clicks - 1:
             time.sleep(interval)
+    pos = get_cursor_pos()
+    _overlay(overlay.flash_click, pos["x"], pos["y"], button, 0.6)
 
 
 def wheel(amount: int, horizontal: bool = False) -> None:
     """Scroll by ``amount`` wheel notches (positive = up/right)."""
     flags = MOUSEEVENTF_HWHEEL if horizontal else MOUSEEVENTF_WHEEL
     _mouse_event(flags, data=int(amount) * WHEEL_DELTA)
+    _overlay(overlay.flash_keys, f"wheel {'h' if horizontal else 'v'} {int(amount):+d}")
 
 
 def _norm_button(button: str) -> str:
@@ -292,6 +309,7 @@ def key_stroke(key: str) -> int:
     flags = KEYEVENTF_EXTENDEDKEY if vk in EXTENDED_VKS else 0
     _key_event(vk=vk, flags=flags)
     _key_event(vk=vk, flags=flags | KEYEVENTF_KEYUP)
+    _overlay(overlay.flash_keys, str(key))
     return vk
 
 
@@ -319,6 +337,7 @@ def hotkey(combo: str) -> list[int]:
     for vk in reversed(mod_vks):
         _key_event(vk=vk, flags=KEYEVENTF_KEYUP)
 
+    _overlay(overlay.flash_keys, str(combo))
     return mod_vks + [key_vk]
 
 
@@ -348,6 +367,10 @@ def type_text(text: str, interval: float = 0.01) -> int:
             count += 1
         if interval > 0:
             time.sleep(interval)
+    snippet = str(text).replace("\r", "").replace("\n", "\\n").replace("\t", "\\t")
+    if len(snippet) > 40:
+        snippet = snippet[:37] + "..."
+    _overlay(overlay.flash_keys, f'type "{snippet}"' if snippet else "type")
     return count
 
 

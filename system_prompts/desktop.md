@@ -70,6 +70,12 @@ delivered but keyboard not" situation — so check `keyboard_delivery` before ty
 - `ask_user(question, options=[...])` asks the user and waits for the answer — use it before any uncertain or state-changing step.
 - `find_workflow`/`load_workflow` before a task; `start_learning_session`/`stop_learning_session` to record the user teaching a workflow.
 
+### Showing the user — overlay
+You can draw on screen so the human sees what you mean, without it appearing in your own captures:
+- `highlight_area(regions, label=..., persist=...)` — outline one or more screen regions (`[left,top,right,bottom]` or `{rect|hwnd|point(+radius)|bbox}` objects); `highlight_clear(token)` removes them.
+- `ask_user(..., highlight=[...], highlight_label=...)` — outline the region the question is about while you wait; it clears when the user answers. Use this during discovery/learning so the user can confirm the area is correct (not over-cropped or misplaced).
+The overlay also shows a persistent status HUD, a frame around every capture, and click/key feedback automatically (set `PROLIGHT_OVERLAY=0` to disable ambient feedback; explicit highlights still show).
+
 ### Rules of action
 1. **Focus first, and verify keyboard focus.** Use `win_ensure_foreground(hwnd)` and confirm `keyboard_delivery` before keyboard input.
 2. **Snapshot, then act by id.** Prefer `win_snapshot` → `win_click_control(id=...)`. When UIA/OCR expose nothing useful, use `screen_find`.

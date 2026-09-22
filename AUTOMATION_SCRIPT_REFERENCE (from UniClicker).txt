@@ -1,0 +1,337 @@
+# Automation Script Language — Documentation
+
+A reference for the Pascal-based script engine (`scriptrunner.pas` + `scriptparser.pas`) plus a mapping of each script action to the ProLight-agent tool that would perform it.
+
+---
+
+## 1. File Format Overview
+
+A script is a plain-text file (e.g. `script.txt`) with two top-level sections:
+
+```
+(* comments in Pascal-style brackets *)
+script_rev_fill_reserve.txt
+(* optional notes ... *)
+
+[FUNCTIONS]
+... function definitions ...
+
+[HOTKEYS]
+... hotkey definitions ...
+```
+
+- **Comments:** `(* ... *)` — can appear anywhere on a line; the parser deletes them before processing.
+- **Tabs** are stripped; leading/trailing whitespace is trimmed.
+- **String values** in the header are wrapped in `"`.
+- **Action lines** begin with `_` and are indented under `actions =`.
+- **Labels** begin with `[` and end with `]` (single token, e.g. `[loopTop]`).
+
+---
+
+## 2. Function / Hotkey Headers
+
+Both `[FUNCTIONS]` and `[HOTKEYS]` use the same record layout (`TFunc`):
+
+| Field         | Meaning                                                                 | Notes |
+|---------------|-------------------------------------------------------------------------|-------|
+| `name`        | Identifier used by `_call "..."`                                        | 20 chars max |
+| `triggerStr`  | Hotkey sequence (`#NNN…`); ignored in `[FUNCTIONS]`                     | 3 chars max in struct |
+| `windowTitle` | Title fragment to match; used by the hotkey dispatcher                  | 40 chars max |
+| `exclude`     | `"true"` / `"false"` — invert the title match                            | |
+| `actions`     | Marks the start of the action block                                      | |
+
+**Hotkey trigger syntax:** `#NNN` writes a raw character code (e.g. `#017` = Ctrl, `#016` = Shift, `#013` = Enter), so `#017CC` means the two-byte sequence `Ctrl, C, C`.
+
+Limits per function:
+- `actions`: 0..50
+- `labels`: 0..9
+- args per action: 4 (`arg[0..3]`)
+
+---
+
+## 3. Action Commands
+
+Every action is written as:
+
+```
+_<command> [arg0[, arg1[, arg2[, arg3]]]]
+```
+
+Arguments are separated by `,`. Quotes are used for strings, `@` for variables, `[` `]` for labels.
+
+### 3.1 Argument types
+
+| Syntax           | Type       | Notes |
+|------------------|------------|-------|
+| `123`            | `atInt`    | Decimal |
+| `"some text"`    | `atStr`    | Spaces allowed |
+| `@0` … `@9`      | `atVar`    | User variables (`customVar[0..9]`, 200 chars each) |
+| `@i`             | `atVar`    | Special: value of `inputStr` (scanner input) |
+| `@c`             | `atVar`    | Special: current clipboard text |
+| `[label]`        | `atLabel`  | Jump target inside the function |
+
+When a **string** is read (`readS`), characters `' '`, `'-'`, `'.'`, `'('`, `')'` are stripped — useful for comparing formatted numbers.
+
+---
+
+### 3.2 Complete command reference
+
+#### `_call "funcName"`
+Pushes the caller frame onto `stackFunc` (max depth 6) and starts `funcName` (must exist in `[FUNCTIONS]`).
+- **Args:** `arg[0]` — function name (`atStr`).
+- **Agent tool equivalent:** none — internal to the runner. Use `find_workflow`/`load_workflow` to load reusable procedures in the agent instead.
+
+---
+
+#### `_key vk[, modifier]`
+Presses a key, optionally while holding a modifier (`17`=Ctrl, `16`=Shift, `18`=Alt, `9`=Tab, `13`=Enter, `37/38/39/40`=arrows).
+- **Args:** `arg[0]` — VK code (`atInt`) **or** a single-char string (`atStr`, use `Ord` of its first char); `arg[1]` — optional modifier.
+- **Agent tools:**
+  - `keybd_stroke(key="tab")`, `keybd_stroke(key="enter")`
+  - `keybd_hotkey(combo="ctrl+tab")`, `keybd_hotkey(combo="ctrl+f")`
+  - `keybd_down(key=...)` / `keybd_up(key=...)` for held keys
+  - Always pass `hwnd=...` so focus loss is reported loudly.
+
+---
+
+#### `_wait ms`
+Pauses the runner for `ms` milliseconds (`KillTimer`…`Delay`…`SetTimer`).
+- **Args:** `arg[0]` — milliseconds (`atInt`, `atStr`, or `atVar`).
+- **Agent tool equivalent:** `await asyncio.sleep(ms/1000)` between tool calls — no explicit tool. To *wait for a condition* instead, use `_waitwindow` / `_waitscan`.
+
+---
+
+#### `_waitwindow "fragment"`
+Blocks the current function until the **foreground window title** contains the fragment. Implemented with a 500 ms `SetTimer` polling `GetWindowTextW(GetForegroundWindow)`. The substring is taken from the *previous* action's `arg[0]`.
+- **Args:** `arg[0]` — title substring (`atStr`).
+- **Agent tools:**
+  - `win_changes(wait_for="Save", timeout=10)` — polls until the text appears.
+  - or `win_list_hwnd(process_filter="...")` in a loop, checking `title`.
+  - `win_snapshot` first to establish the baseline.
+
+---
+
+#### `_waitscan`
+Sets `busyOnAction := true` and calls `BypassDisable` — hands control to the external scanner (barcode / keyboard-wedge input). The runner stalls until the scanner re-enables it.
+- **Args:** none.
+- **Agent tool equivalent:** none direct. In the agent, poll the clipboard or use `win_read_text` / `win_changes` to detect the scanned value arriving in the UI.
+
+---
+
+#### `_type text`
+Types the argument into the focused control using the built-in `outputStr` (Unicode injection — layout independent).
+- **Args:** `arg[0]` — string or variable (`atStr` / `atVar`). Common: `_type @0` types the contents of var 0.
+- **Agent tools:** `keybd_type(text=..., hwnd=...)`. For exact/long values: `clipboard_set(text="...")` followed by `keybd_hotkey(combo="ctrl+v")`.
+
+---
+
+#### `_lmb x, y`
+Left mouse click at absolute screen coordinates.
+- **Args:** `arg[0], arg[1]` — screen X, Y (`atInt` / `atVar`).
+- **Agent tools:**
+  - `mouse_click(x=..., y=..., button="left")`
+  - or `win_click_control(id="c7")` if the target is a UIA control from `win_snapshot`.
+  - Focus with `win_ensure_foreground(hwnd=...)` first.
+
+---
+
+#### `_rmb x, y`
+Right mouse click (same mechanics as `_lmb`).
+- **Agent tool:** `mouse_click(x=..., y=..., button="right")`.
+
+---
+
+#### `_look x, y, @v`
+Samples the mean colour of an 8×8 block starting at `(x, y)` (step 2 px) and stores the result as an **RGB hex string** (e.g. `"FFA080"`) into variable `@v`.
+- **Args:** `arg[0], arg[1]` — screen X, Y; `arg[2]` — destination variable.
+- **Agent tools:**
+  - `screen_find(kind="color", color=[r,g,b], hwnd=...)` — inverse operation (find colour).
+  - `win_snapshot(save=true)` + `vision_look(query="what colour is …")` for semantic reads.
+  - `screen_probe(x=..., y=..., action="hover")` to watch whether the pixel changes.
+
+---
+
+#### `_add @v, n`
+`@v := @v + n` (numerically; empty/invalid vars are treated as 0).
+- **Args:** `arg[0]` — destination var (`atVar`); `arg[1]` — value.
+- **Agent tool equivalent:** none — do the arithmetic in the agent's own state, or keep the counters in the script and drive them via `keybd_type`.
+
+---
+
+#### `_sub @v, n`
+`@v := @v - n`. Same as `_add`.
+
+---
+
+#### `_set @v, value`
+Assigns a string to a variable. Setting from `@c` copies the clipboard.
+- **Args:** `arg[0]` — destination var; `arg[1]` — value (`atInt`, `atStr`, `atVar`).
+- **Agent tools (to obtain the value):**
+  - `clipboard_get(max_chars=20000)` — read clipboard (`@c`).
+  - `win_read_text(hwnd=...)` — read a control's value without OCR.
+  - For writing back into the UI: `win_set_control_text(id="c3", text="...")` or `keybd_type`.
+
+---
+
+#### `_test a, b, [labelT], [labelF]`
+String-compares `a` and `b` after `FilterStr` normalisation; then either calls a function (if the branch arg is a string) or jumps to a label (if the branch arg is a label). Prints `TRUE!`/`FALSE` to stdout.
+- **Args:** `arg[0], arg[1]` — values to compare; `arg[2]` — true branch; `arg[3]` — false branch.
+- **Agent tool equivalent:** none direct. To produce comparable values, use `clipboard_get`, `win_read_text`, `win_changes`, or `vision_look(structured=true)` and branch in the agent.
+
+---
+
+#### `_return`
+Pops one frame from `stackFunc`; if the stack is empty the function ends (`endFunction`).
+- **Args:** none.
+- **Agent tool equivalent:** none — return from the sub-workflow.
+
+---
+
+#### `_title @v`
+Reads `GetWindowTextW(GetForegroundWindow)` into `@v`.
+- **Args:** `arg[0]` — destination var.
+- **Agent tools:**
+  - `win_list_hwnd()` — list all top-level windows with titles.
+  - `win_snapshot()` — full foreground snapshot including `window.title`.
+
+---
+
+#### `_has needle, haystack, [labelT], [labelF]`
+`Pos(needle, haystack) > 0` on normalised strings → jump to a label (or call a function).
+- **Args:** `arg[0]` — substring; `arg[1]` — text to search; `arg[2], arg[3]` — branch targets.
+- **Agent tools (to get the haystack):**
+  - `clipboard_get()` — e.g. after `ctrl+a`/`ctrl+c`.
+  - `win_read_text(hwnd=...)` — read Chromium/list text directly.
+  - `win_changes(wait_for="...")` — wait for the text to *appear* rather than test immediately.
+  - `screen_find(kind="text", text="...", hwnd=...)` — visual containment check.
+
+---
+
+#### `_log a, b, c, d`
+Prints up to four arguments, space-separated, between `>>` … on stdout. Handy for debugging.
+- **Args:** any mix, up to 4.
+- **Agent tool equivalent:** none — write to `logger.debug(...)` inside a tool if you need it.
+
+---
+
+### 3.3 Labels
+
+A line starting with `[` inside an `actions` block defines a jump target:
+
+```
+	_test @0, "1", [case1], [next]
+[case1]
+	_type "one"
+[case1end]
+	_return
+[next]
+	...
+```
+
+Label names are stored up to 10 chars (`TLabel.name: string[10]`). If a branch label is not found, the function ends silently (pc=999).
+
+---
+
+## 4. Variables & Runtime State
+
+| Storage          | Size / count              | Written by                | Read by |
+|------------------|---------------------------|---------------------------|---------|
+| `customVar[0..9]`| 10 × `string[200]`        | `_set`, `_add`, `_sub`, `_look`, `_title` | `@0`…`@9` in any arg position |
+| `inputStr`       | scanner input             | external scanner          | `@i` |
+| Clipboard        | OS clipboard              | user / `Ctrl+C`           | `@c` |
+| Call stack       | `stackFunc[0..5]` (6 deep) | `_call`                   | `_return` |
+
+**Notes:**
+- Numeric args: `readI` falls back to `0` if a string cannot be converted.
+- String args: `readS` strips `space`, `-`, `.`, `(`, `)`.
+- Variables can be initialised empty — numeric usage treats them as `0`.
+
+---
+
+## 5. Complete Example (annotated)
+
+```
+[FUNCTIONS]
+
+name = "moveArtToRev"
+actions =
+	_key 9, 17        (* Ctrl + Tab        → keybd_hotkey("ctrl+tab", hwnd=...) *)
+	_wait 200
+	_key "F", 17      (* Ctrl + F          → keybd_hotkey("ctrl+f",   hwnd=...) *)
+	_wait 200
+	_type @0          (* paste article     → keybd_type(text=@0, hwnd=...)        *)
+	_wait 1600
+	_key 9            (* Tab               → keybd_stroke("tab")                  *)
+	_key 9
+	_wait 1000
+	_key 13           (* Enter             → keybd_stroke("enter")                *)
+	_wait 500
+	_key "V", 17      (* Ctrl + V          → keybd_hotkey("ctrl+v")               *)
+
+
+name = "moveReportToRev"
+actions =
+	_set @0, @c       (* article ← clipboard → clipboard_get()                    *)
+	_wait 300
+	_key 39           (* Right             → keybd_stroke("right")                *)
+	...
+	_key "C", 17      (* Ctrl + C          → keybd_hotkey("ctrl+c")               *)
+	_wait 500
+	_call "moveArtToRev"
+
+
+[HOTKEYS]
+
+name = "startReportToRev"
+triggerStr = "#017CC"     (* Ctrl + C, C — matched by the hotkey scanner *)
+windowTitle = ""
+exclude = "false"
+actions =
+	_wait 300
+	_call "moveReportToRev"
+
+
+name = "backToReport"
+triggerStr = "#016#016#016"
+actions =
+	_wait 300
+	_key 9, 17
+	_wait 200
+	_key 37
+	...
+	_key "C", 17
+	_wait 300
+	_call "moveReportToRev"
+```
+
+---
+
+## 6. Tool Mapping Cheat-Sheet
+
+| Script action                | Agent tool(s) (with typical parameters)                                     |
+|------------------------------|------------------------------------------------------------------------------|
+| `_call "f"`                  | *(internal; use `load_workflow` / `find_workflow` for agent-side reuse)*    |
+| `_key N[, mod]`              | `keybd_hotkey(combo="ctrl+f", hwnd=...)`, `keybd_stroke(key="tab", hwnd=...)`, `keybd_down/up` |
+| `_wait ms`                   | `asyncio.sleep(ms/1000)` — no tool                                          |
+| `_waitwindow "s"`            | `win_changes(wait_for="s", timeout=10)` or poll `win_list_hwnd`             |
+| `_waitscan`                  | *(external scanner; poll `clipboard_get` / `win_changes` to detect the value)* |
+| `_type arg`                  | `keybd_type(text=..., hwnd=...)`; for exact text: `clipboard_set` + `keybd_hotkey("ctrl+v")` |
+| `_lmb x, y`                  | `mouse_click(x=, y=, button="left")` or `win_click_control(id="c7")`        |
+| `_rmb x, y`                  | `mouse_click(x=, y=, button="right")`                                       |
+| `_look x, y, @v`             | `screen_find(kind="color", color=..., hwnd=...)`; `win_snapshot(save=true)` + `vision_look` |
+| `_add @v, n` / `_sub @v, n`  | *(internal; keep counters in agent state)*                                  |
+| `_set @v, val`               | source value from `clipboard_get`, `win_read_text`, `win_snapshot`          |
+| `_test a, b, …`              | compare values obtained from `clipboard_get` / `win_read_text`              |
+| `_return`                    | *(internal; end sub-workflow)*                                              |
+| `_title @v`                  | `win_list_hwnd()` / `win_snapshot()` (returns `window.title`)               |
+| `_has a, b, …`               | `win_read_text(hwnd=...)`, `clipboard_get()`, `win_changes(wait_for="...")` |
+| `_log …`                     | `logger.debug(...)` inside a tool, or skip                                  |
+
+### Safety and focus hints (mirroring `tools_guidelines.md`)
+
+1. **Before any `_key` / `_type` block**, call `win_ensure_foreground(hwnd=...)` and check `keyboard_delivery == "verified"`. `SendInput` silently delivers nothing when the target thread lacks focus.
+2. **Before `_lmb` / `_rmb`**, resolve coordinates with `win_snapshot` (element ids → `mouse_click(id="c7")`) or `screen_find(kind="color"|"template"|"text", ...)` rather than hard-coding pixels.
+3. **After each state-changing action**, verify with `win_changes()` (cheap delta) before the next step — replaces chained blind `_wait`s.
+4. **For long or exact inputs**, use `clipboard_set(text=...)` + `keybd_hotkey(combo="ctrl+v")` instead of `keybd_type`, then read back with `clipboard_get`.
+5. **Before irreversible clicks**, ask the user with `ask_user(question=..., options=[...], highlight=[...])`.
+6. **Deterministic over vision**: prefer `screen_find` / UIA ids from `win_snapshot` before falling back to `vision_look(structured=true)` coordinates.

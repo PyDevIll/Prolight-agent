@@ -25,7 +25,7 @@ from loguru import logger
 from scipy import ndimage
 from scipy.signal import fftconvolve
 
-from lib import winapi
+from lib import overlay, winapi
 
 VISION_DIR = Path(__file__).resolve().parent.parent / "data" / "vision"
 VISION_DIR.mkdir(parents=True, exist_ok=True)
@@ -66,15 +66,30 @@ def grab_screen(rect: Optional[RectLike] = None, monitor: int = 1) -> Image.Imag
         else:
             left, top, right, bottom = normalize_rect(rect)
             mon = {"left": left, "top": top, "width": right - left, "height": bottom - top}
-        shot = sct.grab(mon)
-        return Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+        cap_rect = (mon["left"], mon["top"], mon["left"] + mon["width"], mon["top"] + mon["height"])
+        overlay.begin_capture(cap_rect)
+        try:
+            shot = sct.grab(mon)
+        finally:
+            overlay.end_capture()
+        img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+    overlay.flash_rect(cap_rect, label="screen")
+    return img
 
 
 def grab_window(hwnd: int) -> Optional[Image.Image]:
     """Grab a whole window with PrintWindow (works while occluded)."""
-    cap = winapi.capture_window(int(hwnd))
+    wr = winapi.get_window_rect(int(hwnd))
+    cap_rect = (wr["left"], wr["top"], wr["right"], wr["bottom"]) if wr else None
+    overlay.begin_capture(cap_rect)
+    try:
+        cap = winapi.capture_window(int(hwnd))
+    finally:
+        overlay.end_capture()
     if not cap:
         return None
+    if cap_rect:
+        overlay.flash_rect(cap_rect, label="window")
     return bgra_to_pil(cap)
 
 
