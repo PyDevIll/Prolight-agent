@@ -153,7 +153,8 @@ def _writer(session: dict) -> None:
                         "control_type": el.get("control_type", ""),
                         "automation_id": el.get("automation_id", ""),
                     }
-                session["last_click"] = {"control": event.get("control"), "t": time.time()}
+                session["last_click"] = {"control": event.get("control"), "t": time.time(),
+                                         "x": x, "y": y}
                 hwnd = event.get("hwnd") or 0
                 if hwnd and winapi.is_window(hwnd):
                     try:
@@ -228,7 +229,7 @@ def _settle(hwnd: int, is_web: bool) -> str:
     return "timeout"  # user decision: a non-settling window is accepted anyway
 
 
-def _capture_once(session: dict, loop, action: str) -> None:
+def _capture_once(session: dict, loop, action: str, click: Optional[dict] = None) -> None:
     fg = _foreground()
     hwnd = fg["hwnd"]
     if not hwnd or not winapi.is_window(hwnd):
@@ -241,21 +242,46 @@ def _capture_once(session: dict, loop, action: str) -> None:
     is_web = any(b in proc for b in _BROWSER_KEYWORDS) or "chrome_widgetwin" in cls
     stability = _settle(hwnd, is_web)
     try:
+        # Fast path: UIA/menu only. OCR (slow) is added only when the tree is
+        # poor/empty (custom-drawn or a11y-off apps), so normal captures are quick.
         state = loop.run_until_complete(window_state.capture_state(
-            hwnd=hwnd, include={"uia", "menu", "focus", "text"}, max_controls=200, max_text=40))
+            hwnd=hwnd, include={"uia", "menu", "focus"}, max_controls=200))
+        if (state.uia_coverage or "").lower() in ("poor", "empty"):
+            state = loop.run_until_complete(window_state.capture_state(
+                hwnd=hwnd, include={"uia", "menu", "focus", "text"}, max_controls=200, max_text=40))
     except Exception as e:
         logger.warning(f"tracker: capture failed for {hwnd}: {e}")
         return
     key = learning_db.resolve_app_key(hwnd=hwnd, title=fg["title"], process=fg["process"])
-    _emit_state(session, state, key, action, stability)
+    _emit_state(session, state, key, action, stability, click)
 
 
-def _emit_state(session: dict, state, key: str, action: str, stability: str) -> None:
+def _emit_state(session: dict, state, key: str, action: str, stability: str,
+                click: Optional[dict] = None) -> None:
     session["seq"] += 1
     cid = f"k{session['seq']}"
     fp = state.footprint(with_rects=True)
-    last_click = session.get("last_click") or {}
-    clicked = last_click.get("control") if (last_click and time.time() - last_click.get("t", 0) <= _SETTLE_MAX + 3) else None
+    clicked = None
+    if click and time.time() - click.get("t", 0) <= _SETTLE_MAX + 6:
+        c = dict(click.get("control") or {})
+        if c:
+            # stable_key is derived from the element identity (no profile needed);
+            # runtime id is attached from the captured control under the click.
+            try:
+                c["stable_key"] = window_state.Element(
+                    id="", kind="control", name=c.get("name", ""),
+                    control_type=c.get("control_type", ""),
+                    automation_id=c.get("automation_id", "")).stable_key()
+            except Exception:
+                pass
+            px, py = click.get("x"), click.get("y")
+            if px is not None and py is not None:
+                for e in list(state.controls) + list(state.texts):
+                    r = e.rect
+                    if r and r[0] <= px <= r[2] and r[1] <= py <= r[3]:
+                        c["id"] = e.id
+                        break
+            clicked = c
     rec = {
         "capture_id": cid, "guide_key": key, "action": action,
         "ts_action": session.get("last_action_ts"), "ts_capture": _now(),
@@ -315,15 +341,17 @@ def _capturer(session: dict) -> None:
         asyncio.set_event_loop(loop)
         time.sleep(_DEBOUNCE)
         if not session["stop"].is_set():
-            _capture_once(session, loop, "start")
+            _capture_once(session, loop, "start", None)
         while not session["stop"].is_set():
             if not session["dirty"].wait(timeout=0.5):
                 continue
             session["dirty"].clear()
+            click = session.get("last_click") or None
+            session["last_click"] = {}
             time.sleep(_DEBOUNCE)
             if session["stop"].is_set():
                 break
-            _capture_once(session, loop, session.get("last_action_kind") or "action")
+            _capture_once(session, loop, session.get("last_action_kind") or "action", click)
     finally:
         try:
             loop.close()

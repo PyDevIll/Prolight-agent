@@ -113,11 +113,41 @@ def _segment(recs: list) -> list:
     return states
 
 
+def _spec_from_clicked(cl: dict) -> dict:
+    aid = (cl.get("automation_id") or "").strip()
+    if aid:
+        return {"automation_id": aid}
+    nm = (cl.get("name") or "").strip()
+    if nm:
+        return {"control_type": cl.get("control_type", ""), "name": nm}
+    return {}
+
+
 def _derive_state(segment: list, include_ocr: bool = True) -> dict:
     """Turn one layout segment into a profile-state dict (deterministic)."""
     rep = max(segment, key=lambda r: (len(r.get("controls") or []), len(r.get("texts") or [])))
     state = rebuild_state(rep)
     controls = discovery.controls_from_state(state, include_ocr=include_ocr)
+    # Ensure every actually-clicked control is a named control (marked verified),
+    # so a workflow step always resolves — even if the click resolved to an
+    # element outside the depth-limited snapshot.
+    used = set(controls)
+    for r in segment:
+        spec = _spec_from_clicked(r.get("clicked") or {})
+        if not spec:
+            continue
+        existing = next((v for v in controls.values()
+                         if _normspec({"match": spec}) == _normspec(v)), None)
+        if existing is not None:
+            existing["verified"] = True
+            continue
+        cl = r.get("clicked") or {}
+        base = discovery.slugify(cl.get("name") or cl.get("automation_id") or "control")
+        name, i = base, 2
+        while name in used:
+            name, i = f"{base}_{i}", i + 1
+        used.add(name)
+        controls[name] = {"match": spec, "verified": True}
     detect = discovery.detect_from_state(state, controls)
     menu_names = [m.get("name", "") for m in rep.get("menu", []) if m.get("name")]
     if menu_names:
@@ -259,20 +289,39 @@ def _state_id_for(states: list, capture_id: str) -> str:
     return "?"
 
 
+def _nk(s) -> str:
+    return " ".join((s or "").split()).strip().lower()
+
+
+def _spec_stable_key(m: dict) -> str:
+    aid = m.get("automation_id") or ""
+    if aid:
+        return f"control:{aid}"
+    ct = (m.get("control_type") or "").lower()
+    nm = _nk(m.get("name"))
+    return f"control:{ct}:{nm}" if (ct or nm) else ""
+
+
 def _control_name(states: list, capture_id: str, clicked: dict) -> str:
+    """Map a recorded click to a logical control name (stable_key first)."""
     if not clicked:
         return ""
+    ck = clicked.get("stable_key") or ""
+    caid = (clicked.get("automation_id") or "").lower()
+    cname = _nk(clicked.get("name"))
+    cct = (clicked.get("control_type") or "").lower()
     for st in states:
         if capture_id not in (st.get("captures") or []):
             continue
         for name, spec in (st.get("controls") or {}).items():
             m = spec.get("match", spec) if isinstance(spec, dict) else {}
-            aid = (m.get("automation_id", "") or "").lower()
-            ct = (m.get("control_type", "") or "").lower()
-            nm = (m.get("name", "") or "").lower()
-            if (aid and aid == (clicked.get("automation_id", "") or "").lower()) or \
-               (nm and nm == (clicked.get("name", "") or "").lower()) or \
-               (ct and ct == (clicked.get("control_type", "") or "").lower() and nm and nm == (clicked.get("name", "") or "").lower()):
+            if m.get("ocr"):
+                continue
+            if ck and _spec_stable_key(m) == ck:
+                return name
+            if caid and (m.get("automation_id") or "").lower() == caid:
+                return name
+            if cname and _nk(m.get("name")) == cname and (m.get("control_type") or "").lower() == cct:
                 return name
         break
     return clicked.get("name", "")
@@ -300,7 +349,8 @@ def build_workflow(label: str, timeline: list, derived_by_key: dict, records_by_
             if action == "start":
                 lines.append(f"- [state `{sid}`] (initial layout)")
             elif action == "click":
-                lines.append(f"- [state `{sid}`] click `{cname or clicked.get('name', '?')}`")
+                label = cname or clicked.get("name") or "(unknown control — use OCR/vision)"
+                lines.append(f"- [state `{sid}`] click `{label}`")
             elif action == "key":
                 lines.append(f"- [state `{sid}`] type / key input")
             elif action == "focus":
