@@ -95,6 +95,8 @@ class Agent:
         self.messages = ContextPool()
         self._plan = None              # current PromptPlan (instruction planner)
         self._active_groups = None     # tool groups exposed this run (None = all)
+        self._unlocked_groups = set()  # groups unlocked by enable_tools this run
+        self._last_volatile = None     # last injected route fragment
 
         # Tell the context manager how large the static prompt is, so its
         # overflow/compression decision measures the real assembled context.
@@ -118,10 +120,14 @@ class Agent:
         self.messages.base_prompt_tokens = count_tokens(_static)
 
     def set_instruction_plan(self, plan) -> None:
-        """Apply a PromptPlan: swap base-prompt fragments and scope tools."""
+        """Apply a PromptPlan: swap base-prompt fragments and scope tools.
+
+        Groups the model unlocked via ``enable_tools`` are preserved across
+        re-plans (the router re-applies the plan mid-run).
+        """
         from lib import instruction_planner as ip
         self._plan = plan
-        self._active_groups = set(plan.tool_groups)
+        self._active_groups = set(plan.tool_groups) | self._unlocked_groups
         self._base_prompts = ip.base_prompts_for(plan)
         self._refresh_base_prompt_tokens()
         logger.info(f"Instruction plan: {plan.describe()}")
@@ -134,8 +140,42 @@ class Agent:
         for g in groups or []:
             g = str(g).strip().lower()
             if g in ALL_GROUPS:
+                self._unlocked_groups.add(g)
                 self._active_groups.add(g)
         return sorted(self._active_groups)
+
+    def _maybe_route(self) -> None:
+        """Deterministically route the current window state against its profile.
+
+        Runs after a tool batch; if a profile exists and a state matches, inject
+        the profile/state fragment as the plan's volatile layer and widen the
+        tool groups needed to act on the resolved controls. No LLM call.
+        """
+        if not self._use_tools or self._plan is None:
+            return
+        try:
+            from lib import window_state, profiles, router
+            state = window_state.get()
+            if state is None or not state.window:
+                return
+            win = state.window or {}
+            found = profiles.find_profile(
+                hwnd=state.hwnd, title=win.get("title", ""), process=win.get("process", ""))
+            if not found:
+                return
+            key, prof = found
+            result = router.route(prof, state, key)
+            volatile = router.volatile_text(result, prof)
+            if not volatile or volatile == self._last_volatile:
+                return
+            self._last_volatile = volatile
+            self._plan.volatile = volatile
+            self._plan.tool_groups = self._plan.tool_groups | result.get("tool_groups", set())
+            self.set_instruction_plan(self._plan)
+            logger.info(f"Route: profile={key} state={result.get('state_id')} "
+                        f"controls={list(result.get('controls') or {})}")
+        except Exception as e:
+            logger.warning(f"routing failed: {e}")
 
     def _plan_for_run(self, prompt: str) -> None:
         """Deterministically pick fragments/tool groups for this run.
@@ -143,6 +183,8 @@ class Agent:
         Uses only cheap signals (goal keywords + the foreground window's guide);
         no LLM call. Falls back to exposing all tools if anything goes wrong.
         """
+        self._unlocked_groups = set()
+        self._last_volatile = None
         try:
             from lib import instruction_planner as ip
             from lib import winapi, learning_db
@@ -504,6 +546,10 @@ class Agent:
 
                 for result in tool_results:
                     self.messages.append(result, save=True)
+
+                # Deterministic re-route: if the window now matches a profile
+                # state, inject its fragment/controls before the next step.
+                self._maybe_route()
             else:
                 # Final response — no tool calls
                 content = message.get("content", "")

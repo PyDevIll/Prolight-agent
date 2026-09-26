@@ -39,6 +39,20 @@ what they do.
 Template: `Purpose · Window & focus · Main areas (and purpose) · Key controls ·
 Shortcuts · Reading app state · Gotchas · Last verified`.
 
+### App profiles — `interaction_guides/<key>.profile.json`
+A machine-readable companion to the guide that the runtime uses to recognise the
+app and its state and to map **named controls** to live element ids — no LLM.
+- `trigger`: when the profile applies (process / title / url).
+- `states[]`: each has `detect` rules (`ocr_any`/`ocr_all`, `uia_any`,
+  `menu_all`, `min_controls`), a `text` fragment injected when the state is
+  active, and `controls`: logical name → `match`
+  (`automation_id` | `uia_name` | `control_type` | `ocr`).
+- `footprints`: stable element keys per state (for cross-run verification).
+Use `load_app_profile`/`save_app_profile`; `route_app_state` shows the current
+match and resolved control ids; `resolve_app_control(name)` resolves one name.
+When a state matches, the relevant fragment and control ids appear automatically
+in your context — act on them directly.
+
 ### Workflows — `workflows/<task>.md`
 A repeatable procedure that spans apps/windows to reach a goal (e.g. "process an
 incoming invoice request"). A workflow describes the **goal**, the **apps**

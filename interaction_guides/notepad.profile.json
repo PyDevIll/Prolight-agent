@@ -1,0 +1,39 @@
+{
+  "key": "notepad",
+  "display": "Notepad",
+  "version": 1,
+  "trigger": {
+    "process": [
+      "notepad"
+    ]
+  },
+  "initial_text": "Notepad (plain-text editor). The editor is a UIA Edit control.",
+  "states": [
+    {
+      "id": "editor",
+      "detect": {
+        "uia_any": [
+          {
+            "control_type": "Edit"
+          }
+        ],
+        "min_controls": 1
+      },
+      "text": "Text editor is focused/idle. Type into the Edit control; read via win_read_text.",
+      "controls": {
+        "editor": {
+          "match": {
+            "control_type": "Edit"
+          }
+        },
+        "menu_bar": {
+          "match": {
+            "control_type": "MenuBar"
+          }
+        }
+      }
+    }
+  ],
+  "footprints": {},
+  "updated": "2026-09-26"
+}

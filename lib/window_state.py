@@ -71,6 +71,21 @@ class Element:
         l, t, r, b = self.rect
         return (int((l + r) // 2), int((t + b) // 2))
 
+    def stable_key(self) -> str:
+        """A cross-run identity (used by profiles/footprints).
+
+        Deterministic from the element's intrinsic identity — never the runtime
+        ``id`` (which is session-local). Prefers ``automation_id``; falls back to
+        control type + normalized name.
+        """
+        if self.kind == "control":
+            if self.automation_id:
+                return f"control:{self.automation_id}"
+            return f"control:{(self.control_type or '?').lower()}:{_norm(self.name)}"
+        if self.kind == "menu":
+            return f"menu:{_norm(self.name)}"
+        return f"text:{_norm(self.name)}"
+
 
 @dataclass
 class WindowState:
@@ -102,6 +117,39 @@ class WindowState:
             if e.id == element_id:
                 return e
         return None
+
+    def stable_keys(self) -> list:
+        """Sorted set of element ``stable_key``s in this snapshot."""
+        return sorted({e.stable_key() for e in self.all_elements()})
+
+    def footprint(self, with_rects: bool = False) -> dict:
+        """A deterministic signature of this state.
+
+        ``keys`` are the stable element identities; with ``with_rects`` each key
+        also gets a window-relative rect (0..1) so a profile can verify both the
+        presence and the rough placement of an element across runs.
+        """
+        fp = {
+            "keys": self.stable_keys(),
+            "controls": len(self.controls),
+            "texts": len(self.texts),
+            "menu": len(self.menu),
+        }
+        if with_rects:
+            rel = {}
+            r = (self.window or {}).get("rect")
+            if r and r["right"] > r["left"] and r["bottom"] > r["top"]:
+                w = r["right"] - r["left"]
+                h = r["bottom"] - r["top"]
+                for e in self.all_elements():
+                    if e.rect:
+                        l, t, rr, b = e.rect
+                        rel[e.stable_key()] = [
+                            round((l - r["left"]) / w, 4), round((t - r["top"]) / h, 4),
+                            round((rr - r["left"]) / w, 4), round((b - r["top"]) / h, 4),
+                        ]
+            fp["rel_rects"] = rel
+        return fp
 
 
 # в”Ђв”Ђ registry в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ

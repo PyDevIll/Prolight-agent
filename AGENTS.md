@@ -77,6 +77,7 @@ Windows desktop GUI-automation agent ("ProLight"). Console-only, **non-admin**, 
 ## Learning DB
 
 - `interaction_guides/<key>.md` and `workflows/<task>.md` are the agent's learned-fact databases, managed by `lib/learning_db.py` + `builtin_tools/learning_tools.py` (see `system_prompts/learning.md`). Guide key resolution: explicit name → window-title tail → title head → process name (`guide_candidates`). Neither dir is gitignored; `workflows/` is created on demand.
+- **Structured profiles + deterministic router** (`lib/profiles.py`, `lib/router.py`, `builtin_tools/profile_tools.py`): `interaction_guides/<key>.profile.json` is a machine-readable companion to the `.md` guide — `trigger` (process/title/url), `states[]` (each with `detect` rules over a `WindowState`, an injected `text`, and named `controls`), and `footprints`. `Element.stable_key()` (`lib/window_state.py`) is the cross-run element identity (`automation_id` else `type:name`); `WindowState.footprint(with_rects=True)` builds the per-state signature. After each tool batch, `agent._maybe_route()` calls `router.route(profile, window_state.get())` — with no LLM — and on a state match injects the result as `PromptPlan.volatile` (named controls already resolved to live ids) and widens tools to `uia`+`mouse`. Tools: `load_app_profile`, `save_app_profile`, `route_app_state`, `resolve_app_control`.
 - Learning mode records the user's real actions with `components/tracker.py` (pynput global hooks → `data/sessions/<label>_<ts>/events.jsonl` + a whole-window JPEG per click; the control under the cursor via `ui_tree.element_at_point_sync`). It keeps the last `MAX_SESSIONS` (10) sessions; `data/` is gitignored.
 - `ask_user` (in `meta_tools.py`) is a **blocking** question: `app.ask_user_question` sets `_pending_question`, and the console loop routes the next line to it instead of enqueuing a request.
 
@@ -88,7 +89,7 @@ Windows desktop GUI-automation agent ("ProLight"). Console-only, **non-admin**, 
 
 ## Phase / roadmap
 
-- Phases 0–3 done (scaffold, perception, actuation, UIA control discovery) plus the vision sub-agent, the perception consolidation (snapshot/diff + OCR locator) and **Phase 4 learning** (`lib/learning_db.py`, `builtin_tools/learning_tools.py`, `components/tracker.py`, `screen_probe`, blocking `ask_user`). Next is Phase 5 (heartbeat).
+- Phases 0–3 done (scaffold, perception, actuation, UIA control discovery) plus the vision sub-agent, the perception consolidation (snapshot/diff + OCR locator), **Phase 4 learning** and the **Phase 1-2 deterministic layer** (`lib/instruction_planner.py` partial prompt/tool scoping; `lib/profiles.py` + `lib/router.py` structured profiles + state routing; stable `Element.stable_key()`/`WindowState.footprint()`). Next is Phase 3 (deterministic discovery into profiles + direct mapped execution), then Phase 5 (heartbeat).
 - Roadmap: `GENERATED_PLAN.txt` (no `DEVLOG.txt`); requirements: `APP_SPECS_OUTLINES.txt`; real-world friction log: `ISSUES_AND_IMPROVEMENT_IDEAS.txt`.
 - Planned but not yet created: `builtin_tools/app_tools.py` (launch/list/activate/close), `components/heartbeat.py` (Phase 5).
 - `reference_sources/` (gitignored) holds the verbatim iNysha copies and `UniClicker_sample_source/` (Delphi input-capture reference) — reference only, don't edit.
