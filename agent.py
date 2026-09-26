@@ -347,6 +347,23 @@ class Agent:
             raise ValueError(f"Invalid LLM response: {response_dict}")
         return response_dict
 
+    def _maybe_compress_after_run(self) -> None:
+        """Start background compression once a run has produced its final answer.
+
+        Compression is never triggered inside the loop; it only happens here (or
+        via the manual ``/compress`` command). ``compress()`` re-checks the token
+        threshold and ``start_background_compression`` no-ops if one is running.
+        """
+        if self._helper_agent and self.messages.overflow:
+            logger.info("Run finished with overflow — starting background compression")
+            self.messages.start_background_compression(self._helper_agent)
+
+    async def compress_context(self, force: bool = False) -> Optional[str]:
+        """Compress the context now (used by the manual ``/compress`` command)."""
+        if not self._helper_agent:
+            return None
+        return await self.messages.compress(self._helper_agent, force=force)
+
     async def run(self, initial_user_request: str = "", reasoning_callback=None) -> str:
         """
         Main agent loop.
@@ -357,6 +374,10 @@ class Agent:
         iteration = 0
         enable_reasoning = bool(reasoning_callback)
 
+        # Never compress mid-loop. If the previous run left a background
+        # compression in flight, wait for it so we append to a stable context.
+        await self.messages.await_compression()
+
         # Add user message to context
         if initial_user_request:
             self.messages.append({
@@ -364,14 +385,6 @@ class Agent:
                 "name": "User",
                 "content": initial_user_request,
             }, save=True)
-
-        # Proactive compression: if context overflowed before LLM call, compress now
-        if self.messages.overflow and self._helper_agent:
-            logger.warning(
-                f"Overflow before LLM request ({self.messages.get_context_length()} tokens) — "
-                "starting background compression"
-            )
-            self.messages.start_background_compression(self._helper_agent)
 
         while iteration < max_iterations:
             iteration += 1
@@ -426,20 +439,17 @@ class Agent:
 
                 for result in tool_results:
                     self.messages.append(result, save=True)
-
-                # Check if context overflowed — trigger compression
-                if self.messages.overflow and self._helper_agent:
-                    logger.info("Context overflow after tools – starting background compression")
-                    self.messages.start_background_compression(self._helper_agent)
             else:
                 # Final response — no tool calls
                 content = message.get("content", "")
                 logger.info(f"Agent finished in {iteration} iterations, "
                            f"context: {self.messages.length} msgs, "
                            f"~{self.messages.get_context_length()} tokens")
+                self._maybe_compress_after_run()
                 return content
 
         logger.warning(f"Max iterations ({max_iterations}) reached")
+        self._maybe_compress_after_run()
         return "Max iterations reached without final response."
 
     async def run_with_crash_recovery(self, initial_user_request: str = "", reasoning_callback=None) -> str:

@@ -62,7 +62,7 @@ async def ask_user_question(question: str, options=None, timeout: float = 300.0)
 
 # ---- Worker coroutine (processes requests sequentially) ----
 async def worker() -> None:
-    from components.cmd_line import process_command_prompt
+    from components.cmd_line import process_command_prompt, process_compress
 
     while True:
         logger.debug(f"Worker queue count: {request_queue.qsize()}")
@@ -71,6 +71,8 @@ async def worker() -> None:
         try:
             if req["type"] == "user":
                 await process_command_prompt(req["prompt"])
+            elif req["type"] == "compress":
+                await process_compress()
             else:
                 logger.warning(f"Unknown request type: {req.get('type')}")
         except Exception as e:
@@ -130,6 +132,12 @@ async def get_command() -> None:
             if user_request in ("/q", "/quit", "/exit"):
                 logger.info("Quit requested")
                 return
+            if user_request == "/compress":
+                # Manual, forced context compression — queued so it never races
+                # a running task.
+                logger.info("Compress requested")
+                await request_queue.put({"type": "compress"})
+                continue
 
             # A pending ask_user question consumes the next line as its answer.
             if _pending_question is not None and not _pending_question.done():

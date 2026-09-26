@@ -56,7 +56,7 @@ def count_tokens(text: str) -> int:
 
 
 # ── Constants ──────────────────────────────────────────────────────────
-DEFAULT_MAX_TOKENS = 500000          # soft cap; proactive trim at 80%
+DEFAULT_MAX_TOKENS = 300000          # soft cap; proactive trim at 70%
 SLIDING_WINDOW_SIZE = 20            # last N messages kept verbatim
 MASK_BATCH_SIZE = 20                 # mask tool outputs older than this many msgs
 COMPRESSION_BATCH = 50              # trigger LLM summarization every N messages
@@ -447,8 +447,12 @@ class ContextPool:
         )
 
     # ── Compression ────────────────────────────────────────────────
-    async def compress(self, helper_agent) -> Optional[str]:
-        """LLM summarization — last resort for large batches (structured output + narrative)."""
+    async def compress(self, helper_agent, force: bool = False) -> Optional[str]:
+        """LLM summarization — last resort for large batches (structured output + narrative).
+
+        ``force=True`` (manual ``/compress``) bypasses the token-ratio gate but
+        still needs at least two entries beyond the sliding window to summarize.
+        """
         async with self._compress_lock:
             self.log_state("BEFORE compression")
 
@@ -458,10 +462,11 @@ class ContextPool:
 
             if not helper_agent:
                 return None
-            # Compress ONLY when the assembled context (all layers + base prompts)
-            # is genuinely near the budget, and there is something older than the
-            # sliding window to summarize. Never on message count alone.
-            if overflow_ratio < COMPRESS_TRIGGER_RATIO:
+            # Compress when the assembled context (all layers + base prompts) is
+            # genuinely near the budget, and there is something older than the
+            # sliding window to summarize. Never on message count alone, unless
+            # explicitly forced.
+            if not force and overflow_ratio < COMPRESS_TRIGGER_RATIO:
                 return None
             if old_count < 2:
                 return None
@@ -703,6 +708,21 @@ class ContextPool:
             logger.exception(f"Background compression failed: {e}")
         finally:
             self._compression_task = None  # allow new runs
+
+
+    async def await_compression(self) -> None:
+        """Wait for an in-flight background compression, if any.
+
+        A background task trims ``_all_entries`` while the worker is idle; the
+        next run awaits it first so it never appends while the log is being
+        rewritten.
+        """
+        task = self._compression_task
+        if task is not None and not task.done():
+            try:
+                await task
+            except Exception as e:
+                logger.warning(f"await_compression: task ended with error: {e}")
 
 
     # ── Crash Recovery ─────────────────────────────────────────────
