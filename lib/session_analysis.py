@@ -276,9 +276,15 @@ def merge_profile(key: str, derived: list, window: dict) -> dict:
 
     prof["updated"] = date.today().isoformat()
     path = profiles.save(key, prof)
-    return {"key": key, "path": str(path), "states_added": added_states,
-            "states_refreshed": refreshed, "controls_added": added_controls,
-            "states_total": len(prof["states"])}
+    guide_path = None
+    try:
+        if not learning_db.read_guide(key):
+            guide_path = str(learning_db.write_guide(key, discovery.guide_markdown(prof)))
+    except Exception as e:
+        logger.warning(f"session_analysis: could not seed guide for {key}: {e}")
+    return {"key": key, "path": str(path), "guide_path": guide_path,
+            "states_added": added_states, "states_refreshed": refreshed,
+            "controls_added": added_controls, "states_total": len(prof["states"])}
 
 
 # ── workflow draft ────────────────────────────────────────────────────────
@@ -352,7 +358,14 @@ def build_workflow(label: str, timeline: list, derived_by_key: dict, records_by_
                 label = cname or clicked.get("name") or "(unknown control — use OCR/vision)"
                 lines.append(f"- [state `{sid}`] click `{label}`")
             elif action == "key":
-                lines.append(f"- [state `{sid}`] type / key input")
+                t = (rec.get("typed") or "").strip()
+                if t:
+                    t = t.replace("\n", "\\n")
+                    if len(t) > 90:
+                        t = t[:90] + "…"
+                    lines.append(f"- [state `{sid}`] type `{t}`")
+                else:
+                    lines.append(f"- [state `{sid}`] type / key input")
             elif action == "focus":
                 lines.append(f"- [state `{sid}`] switch to this app")
             else:
@@ -394,6 +407,16 @@ def analyze_session(session_dir, label: str = "", save: bool = True,
             merges.append(merge_profile(key, states, window))
 
     draft = build_workflow(label, timeline, derived_by_key, records_by_id)
+    # Write the full draft to a file so it is never truncated in a tool response.
+    workflow_path = None
+    try:
+        learning_db.ensure_dirs()
+        slug = learning_db.normalize_key(label or "learned task").replace(" ", "_") or "learned_task"
+        wf = learning_db.WORKFLOWS_DIR / f"_draft_{slug}.md"
+        wf.write_text(draft, encoding="utf-8")
+        workflow_path = str(wf)
+    except Exception as e:
+        logger.warning(f"session_analysis: could not write workflow draft: {e}")
     logger.info(f"session_analysis: keys={list(derived_by_key)} "
                 f"states={ {k: len(v) for k, v in derived_by_key.items()} }")
     return {
@@ -403,5 +426,7 @@ def analyze_session(session_dir, label: str = "", save: bool = True,
         "states": {k: len(v) for k, v in derived_by_key.items()},
         "profile_merges": merges,
         "workflow_name": label or "learned task",
-        "workflow_draft": draft,
+        "workflow_path": workflow_path,
+        "workflow_preview": draft[:1200],
+        "workflow_draft": draft[:2000],
     }

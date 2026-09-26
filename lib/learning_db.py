@@ -101,6 +101,16 @@ def resolve_guide(
 _BROWSER_PROCS = ("chrome", "msedge", "brave", "opera", "vivaldi", "chromium")
 
 
+def _usable_title_segment(s: str) -> bool:
+    """A title segment is a usable app name (not a path/URL/very long string)."""
+    s = (s or "").strip()
+    if not s or len(s) > 60:
+        return False
+    if any(ch in s for ch in ("/", "\\", "://")):
+        return False
+    return any(c.isalnum() for c in s)
+
+
 def resolve_app_key(hwnd: Optional[int] = None, title: str = "", process: str = "") -> str:
     """Best guide key for the app in a window — the create/extend target.
 
@@ -108,7 +118,9 @@ def resolve_app_key(hwnd: Optional[int] = None, title: str = "", process: str = 
     browser's page/app is identified by the **title head**
     (``"Telegram - Google Chrome"`` → ``telegram``) and a native app by the
     **title tail** (``"Book1 - Microsoft Excel"`` → ``microsoft excel``); else the
-    process name. (Alias canonicalization is a later refinement.)
+    process name. Path/URL-like or over-long title segments are rejected so a
+    shell title such as ``MINGW64:/c/Users/...`` never becomes a key. (Alias
+    canonicalization is a later refinement.)
     """
     if hwnd and (not title or not process):
         h = int(hwnd)
@@ -120,13 +132,13 @@ def resolve_app_key(hwnd: Optional[int] = None, title: str = "", process: str = 
     for key in cands:
         if (GUIDES_DIR / f"{key}.md").exists() or (GUIDES_DIR / f"{key}.profile.json").exists():
             return key
-    segs = title_segments(title)
+    segs = [s for s in title_segments(title) if _usable_title_segment(s)]
     proc = normalize_key(process)
-    if any(b in proc for b in _BROWSER_PROCS) and len(segs) > 1:
-        return normalize_key(segs[0])
+    if any(b in proc for b in _BROWSER_PROCS) and segs:
+        return normalize_key(segs[0])[:48]
     if segs:
-        return normalize_key(segs[-1])
-    return proc or (cands[-1] if cands else "unnamed")
+        return normalize_key(segs[-1])[:48]
+    return (proc or (cands[-1] if cands else "unnamed"))[:48]
 
 
 # ── guides ────────────────────────────────────────────────────────────────

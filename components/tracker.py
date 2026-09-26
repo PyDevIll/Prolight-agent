@@ -55,6 +55,9 @@ _DEBOUNCE = 0.5
 _MAX_REPS = 60
 
 _BROWSER_KEYWORDS = ("chrome", "msedge", "brave", "opera", "vivaldi", "chromium")
+# Shell/taskbar windows are never an "app" to learn or merge into a profile.
+_SHELL_CLASSES = ("shell_traywnd", "shell_secondarytraywnd", "notifyiconoverflowwindow",
+                  "progman", "workerw")
 
 _session: Optional[dict] = None
 _lock = threading.Lock()
@@ -147,14 +150,28 @@ def _writer(session: dict) -> None:
             if kind == "click":
                 x, y = int(event.get("x", 0)), int(event.get("y", 0))
                 el = ui_tree.element_at_point_sync(x, y)
+                control = None
                 if el.get("ok"):
-                    event["control"] = {
+                    control = {
                         "name": el.get("name", ""),
                         "control_type": el.get("control_type", ""),
                         "automation_id": el.get("automation_id", ""),
                     }
-                session["last_click"] = {"control": event.get("control"), "t": time.time(),
-                                         "x": x, "y": y}
+                    event["control"] = control
+                    # The element under the cursor may belong to another window
+                    # (e.g. the taskbar). Record its real owner so the click can
+                    # be attributed correctly.
+                    cwin = el.get("window") or {}
+                    event["control_process"] = cwin.get("process", "")
+                    event["control_hwnd"] = el.get("control_hwnd")
+                    if cwin.get("process") and event.get("process") and \
+                            cwin["process"].lower() != (event.get("process") or "").lower():
+                        event["target_mismatch"] = True
+                session["last_click"] = {
+                    "control": control, "t": time.time(), "x": x, "y": y,
+                    "process": (event.get("process") or "").lower(),
+                    "control_process": (event.get("control_process") or "").lower(),
+                }
                 hwnd = event.get("hwnd") or 0
                 if hwnd and winapi.is_window(hwnd):
                     try:
@@ -239,6 +256,11 @@ def _capture_once(session: dict, loop, action: str, click: Optional[dict] = None
         cls = (winapi.get_class_name(hwnd) or "").lower()
     except Exception:
         cls = ""
+    # Ignore the console/terminal where /learn was typed, and the shell/taskbar.
+    if hwnd == session.get("host_hwnd"):
+        return
+    if any(s in cls for s in _SHELL_CLASSES):
+        return
     is_web = any(b in proc for b in _BROWSER_KEYWORDS) or "chrome_widgetwin" in cls
     stability = _settle(hwnd, is_web)
     try:
@@ -261,8 +283,13 @@ def _emit_state(session: dict, state, key: str, action: str, stability: str,
     session["seq"] += 1
     cid = f"k{session['seq']}"
     fp = state.footprint(with_rects=True)
+    win_proc = (state.window.get("process") or "").lower()
+    click_proc = (click.get("control_process") or click.get("process") or "") if click else ""
+    # Only bind a click to this state when it belongs to the SAME app — a click
+    # in app A that triggers a capture of app B must not leak into B's profile.
+    same_app = (not click_proc) or (not win_proc) or (click_proc == win_proc)
     clicked = None
-    if click and time.time() - click.get("t", 0) <= _SETTLE_MAX + 6:
+    if click and same_app and time.time() - click.get("t", 0) <= _SETTLE_MAX + 6:
         c = dict(click.get("control") or {})
         if c:
             # stable_key is derived from the element identity (no profile needed);
@@ -282,10 +309,12 @@ def _emit_state(session: dict, state, key: str, action: str, stability: str,
                         c["id"] = e.id
                         break
             clicked = c
+    typed = "".join(session.get("typed") or [])
+    session["typed"] = []
     rec = {
         "capture_id": cid, "guide_key": key, "action": action,
         "ts_action": session.get("last_action_ts"), "ts_capture": _now(),
-        "settled": True, "stability": stability,
+        "settled": True, "stability": stability, "typed": typed,
         "window": state.window, "focus": state.focus,
         "controls": [{"id": e.id, "name": e.name, "type": e.control_type,
                       "automation_id": e.automation_id, "rect": e.rect,
@@ -383,6 +412,7 @@ def start(label: str = "") -> dict:
             "events": 0, "clicks": 0, "shots": 0, "states": 0, "seq": 0,
             "reps": [], "timeline": [], "last_key": None, "last_rec": None,
             "last_click": {}, "last_action_kind": "start", "last_action_ts": None,
+            "host_hwnd": winapi.get_foreground_window() or 0, "typed": [],
             "listeners": [], "states_path": session_dir / "states.jsonl",
         }
         _session = session
@@ -412,8 +442,19 @@ def start(label: str = "") -> dict:
 
         def on_press(key):
             _mark("key")
+            ch = getattr(key, "char", None)
+            if ch:
+                session["typed"].append(ch)
+            else:
+                k = str(key).lower()
+                if "enter" in k:
+                    session["typed"].append("\n")
+                elif "space" in k:
+                    session["typed"].append(" ")
+                elif "backspace" in k and session["typed"]:
+                    session["typed"].pop()
             _enqueue(session, {"kind": "key", "action": "press", "key": str(key),
-                               "char": getattr(key, "char", None), **_foreground()})
+                               "char": ch, **_foreground()})
 
         try:
             ml = mouse.Listener(on_click=on_click, on_scroll=on_scroll)

@@ -50,7 +50,9 @@ app and its state and to map **named controls** to live element ids — no LLM.
   (`automation_id` | `uia_name` | `control_type` | `ocr`).
 - `footprints`: stable element keys per state (for cross-run verification).
 Use `load_app_profile`/`save_app_profile`; `route_app_state` shows the current
-match and resolved control ids; `resolve_app_control(name)` resolves one name.
+match and resolved control ids; `resolve_app_control(name)` resolves one name;
+`validate_profile` checks a profile (schema + a routing self-test);
+`rename_profile(old,new)` fixes a bad key and `delete_profile(key)` removes junk.
 When a state matches, the relevant fragment and control ids appear automatically
 in your context — act on them directly.
 
@@ -76,15 +78,18 @@ To learn a workflow the user performs:
 1. `start_learning_session(label="<task>")` — records the user's real
    mouse/keyboard actions and, **after each action, a settled `WindowState`**
    (controls, menu, OCR text, stable keys, window-relative footprint) for the
-   foreground window; app switches are tracked in order.
+   foreground window; app switches are tracked in order. The window where
+   `/learn` was typed and shell/taskbar windows are ignored; a click is bound to
+   a state only when it belongs to the same app.
 2. Ask the user to perform the task; observe (do not interfere).
 3. `stop_learning_session()` — returns the session directory with `events.jsonl`,
    `states.jsonl`, `app_timeline.json` and click screenshots.
 4. `summarize_learning_session(label=...)` — deterministically (no LLM) extends
    each app's profile with the observed **states** (new layouts, refreshed
-   footprints, merged named controls) and returns a **cross-app workflow draft**
-   (apps in order, steps referencing `state` + named control).
-5. Review the draft, `save_workflow(...)`, then `ask_user(...)` to confirm.
+   footprints, merged named controls) and writes a **cross-app workflow draft**
+   (apps in order, steps referencing `state` + named control) to
+   `workflows/_draft_<label>.md`; the tool returns that path.
+5. Read the draft file, refine and `save_workflow(...)`, then `ask_user(...)` to confirm.
 
 ### Heartbeat
 A workflow may define a deferred/repeating self-check (e.g. "wait for the

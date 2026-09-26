@@ -75,18 +75,31 @@ def _match_spec(el) -> dict:
     return {"control_type": el.control_type}
 
 
+def _spec_key(spec: dict) -> tuple:
+    return (spec.get("automation_id", ""), spec.get("control_type", ""), spec.get("name", ""))
+
+
 def controls_from_state(state, max_controls: int = 40, include_ocr: bool = True) -> dict:
-    """Named logical controls → match specs, deterministically."""
+    """Named logical controls → match specs, deterministically.
+
+    The logical name prefers the control's **label** (e.g. a Qt button's
+    ``automation_id`` is a long dotted path — the name is far cleaner); the match
+    spec still prefers ``automation_id`` so it resolves reliably. Controls whose
+    match spec is identical are deduplicated (no ``x_6``/``x_7`` twins).
+    """
     used: set = set()
+    seen: set = set()
     controls: dict = {}
     for c in state.controls[:max_controls]:
-        aid = c.automation_id or ""
-        # Prefer a human-readable logical name; a purely numeric automation_id
-        # (e.g. Notepad's Edit = "15") is a poor name, so fall back to the label.
-        raw = aid if (aid and not aid.isdigit()) else (c.name or c.control_type or aid or "control")
-        base = slugify(raw)
+        spec = _match_spec(c)
+        if _spec_key(spec) in seen:
+            continue
+        seen.add(_spec_key(spec))
+        label = c.name if (c.name and not c.name.strip().isdigit()) \
+            else (c.automation_id.split(".")[-1] if c.automation_id else (c.control_type or "control"))
+        base = slugify(label)
         name = _unique(base, used)
-        controls[name] = {"match": _match_spec(c)}
+        controls[name] = {"match": spec}
     if include_ocr:
         for t in state.texts:
             text = (t.name or "").strip()

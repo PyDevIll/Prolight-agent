@@ -9,6 +9,9 @@ the deterministic router:
   - resolve_app_control : resolve one named control in the current state
   - discover_app        : deterministically build+save a profile from a window
   - execute_app_control : deterministically act on a named control (no LLM)
+  - validate_profile    : schema + routing self-test of a profile
+  - rename_profile      : fix a bad/auto-generated key
+  - delete_profile      : remove a junk/obsolete profile
 
 Backed by ``lib/profiles.py`` and ``lib/router.py``. See ``system_prompts/learning.md``.
 """
@@ -200,6 +203,90 @@ async def execute_app_control(name: str, action: str = "click", hwnd: int = None
     return _dump({"ok": False, "error": f"unknown action {action!r}"})
 
 
+async def validate_profile(name: str = "") -> str:
+    """Validate one profile (JSON + a routing self-test on the latest snapshot).
+
+    With no ``name``, validates every profile and reports problems per key.
+
+    Args:
+        name: profile key to validate (default: all profiles).
+    """
+    if name:
+        prof = profiles.load(name)
+        if prof is None:
+            return _dump({"ok": False, "error": f"no profile {name!r}",
+                          "available": [p["key"] for p in profiles.list_profiles()]})
+        out = {"ok": True, "key": prof.get("key") or learning_db.normalize_key(name),
+               "problems": profiles.validate(prof),
+               "states": [s.get("id") for s in prof.get("states") or []]}
+        from lib import window_state
+        st = window_state.get()
+        if st is not None and st.window:
+            res = router.route(prof, st, prof.get("key", ""))
+            out["route"] = {
+                "state_id": res.get("state_id"),
+                "footprint_ok": res.get("footprint_ok"),
+                "missing_keys": res.get("missing_keys"),
+                "moved_keys": res.get("moved_keys"),
+                "layout_changed": res.get("layout_changed"),
+                "resolved_controls": sorted((res.get("controls") or {}).keys()),
+            }
+        else:
+            out["route"] = None
+        return _dump(out)
+    out = []
+    for item in profiles.list_profiles():
+        prof = profiles.load(item["key"])
+        out.append({"key": item["key"],
+                    "problems": profiles.validate(prof) if prof else ["unreadable"]})
+    return _dump({"ok": True, "profiles": out})
+
+
+async def rename_profile(old: str, new: str) -> str:
+    """Rename a profile key (and its guide) — useful to fix a bad key.
+
+    Args:
+        old: current profile key.
+        new: desired key.
+    """
+    prof = profiles.load(old)
+    if prof is None:
+        return _dump({"ok": False, "error": f"no profile {old!r}"})
+    newkey = learning_db.normalize_key(new)
+    old_path = profiles.profile_path(old)
+    prof["key"] = newkey
+    new_path = profiles.save(newkey, prof)
+    if old_path.exists() and old_path != new_path:
+        old_path.unlink()
+    old_md = learning_db.GUIDES_DIR / f"{learning_db.normalize_key(old)}.md"
+    new_md = learning_db.GUIDES_DIR / f"{newkey}.md"
+    if old_md.exists() and not new_md.exists() and old_md != new_md:
+        old_md.rename(new_md)
+    logger.info(f"rename_profile: {old!r} -> {newkey!r}")
+    return _dump({"ok": True, "key": newkey, "path": str(new_path)})
+
+
+async def delete_profile(key: str, also_guide: bool = False) -> str:
+    """Delete a profile (and optionally its ``.md`` guide).
+
+    Args:
+        key: profile key.
+        also_guide: also delete ``<key>.md``.
+    """
+    p = profiles.profile_path(key)
+    removed = {}
+    if p.exists():
+        p.unlink()
+        removed["profile"] = str(p)
+    if also_guide:
+        md = learning_db.GUIDES_DIR / f"{learning_db.normalize_key(key)}.md"
+        if md.exists():
+            md.unlink()
+            removed["guide"] = str(md)
+    logger.info(f"delete_profile: {key!r} removed={list(removed)}")
+    return _dump({"ok": bool(removed), "key": learning_db.normalize_key(key), "removed": removed})
+
+
 GROUP = "learning"
 
 
@@ -287,6 +374,46 @@ TOOL_DEFINITIONS = [
                 "hwnd": {"type": "integer", "description": "Target window (default: the snapshot's window)"},
             },
             "required": ["name"],
+        },
+    ),
+    (
+        "validate_profile",
+        validate_profile,
+        "Validate a profile: JSON/schema problems plus a routing self-test against "
+        "the latest win_snapshot (matched state, footprint ok/moved, resolved "
+        "controls). With no name, validates every profile.",
+        {
+            "type": "object",
+            "properties": {"name": {"type": "string", "description": "Profile key (default: all)"}},
+            "required": [],
+        },
+    ),
+    (
+        "rename_profile",
+        rename_profile,
+        "Rename a profile key (and its .md guide) — use it to fix an auto-generated "
+        "or bad key.",
+        {
+            "type": "object",
+            "properties": {
+                "old": {"type": "string", "description": "Current profile key"},
+                "new": {"type": "string", "description": "Desired key"},
+            },
+            "required": ["old", "new"],
+        },
+    ),
+    (
+        "delete_profile",
+        delete_profile,
+        "Delete a profile (optionally its .md guide) — e.g. a junk profile created "
+        "from a shell/launcher window.",
+        {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "Profile key"},
+                "also_guide": {"type": "boolean", "description": "Also delete <key>.md (default false)"},
+            },
+            "required": ["key"],
         },
     ),
 ]
