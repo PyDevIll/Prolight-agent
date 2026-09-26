@@ -93,13 +93,12 @@ class Agent:
         self._save_history = save_history
         self._helper_agent: Optional[Agent] = None
         self.messages = ContextPool()
+        self._plan = None              # current PromptPlan (instruction planner)
+        self._active_groups = None     # tool groups exposed this run (None = all)
 
         # Tell the context manager how large the static prompt is, so its
         # overflow/compression decision measures the real assembled context.
-        _static = self._system_prompt.get("content", "") or ""
-        for _m in construct_history(self._base_prompts):
-            _static += _m.get("content", "") or ""
-        self.messages.base_prompt_tokens = count_tokens(_static)
+        self._refresh_base_prompt_tokens()
 
         # Load last memory into context (from previous compression)
         if self._last_memory:
@@ -110,6 +109,68 @@ class Agent:
 
     def add_helper_agent(self, helper: Agent) -> None:
         self._helper_agent = helper
+
+    # ── instruction planning (deterministic prompt/tool scoping) ──────────
+    def _refresh_base_prompt_tokens(self) -> None:
+        _static = self._system_prompt.get("content", "") or ""
+        for _m in construct_history(self._base_prompts):
+            _static += _m.get("content", "") or ""
+        self.messages.base_prompt_tokens = count_tokens(_static)
+
+    def set_instruction_plan(self, plan) -> None:
+        """Apply a PromptPlan: swap base-prompt fragments and scope tools."""
+        from lib import instruction_planner as ip
+        self._plan = plan
+        self._active_groups = set(plan.tool_groups)
+        self._base_prompts = ip.base_prompts_for(plan)
+        self._refresh_base_prompt_tokens()
+        logger.info(f"Instruction plan: {plan.describe()}")
+
+    def enable_tool_group(self, groups) -> list[str]:
+        """Unlock extra tool groups for this run (used by ``enable_tools``)."""
+        from lib.instruction_planner import ALL_GROUPS
+        if self._active_groups is None:
+            self._active_groups = set()
+        for g in groups or []:
+            g = str(g).strip().lower()
+            if g in ALL_GROUPS:
+                self._active_groups.add(g)
+        return sorted(self._active_groups)
+
+    def _plan_for_run(self, prompt: str) -> None:
+        """Deterministically pick fragments/tool groups for this run.
+
+        Uses only cheap signals (goal keywords + the foreground window's guide);
+        no LLM call. Falls back to exposing all tools if anything goes wrong.
+        """
+        try:
+            from lib import instruction_planner as ip
+            from lib import winapi, learning_db
+            hwnd = winapi.get_foreground_window() or None
+            title = process = ""
+            guide_found = False
+            guide_key = ""
+            if hwnd:
+                try:
+                    title = winapi.get_window_text(hwnd) or ""
+                    process = winapi.get_process_name(winapi.get_window_pid(hwnd)) or ""
+                except Exception:
+                    pass
+                try:
+                    res = learning_db.resolve_guide(hwnd=hwnd)
+                    guide_found = bool(res.get("found"))
+                    guide_key = res.get("key", "")
+                except Exception:
+                    pass
+            ctx = ip.PlannerContext(
+                user_prompt=prompt, hwnd=hwnd, title=title, process=process,
+                guide_found=guide_found, guide_key=guide_key,
+            )
+            self.set_instruction_plan(ip.plan(ctx))
+        except Exception as e:
+            logger.warning(f"instruction planning failed; exposing all tools: {e}")
+            self._plan = None
+            self._active_groups = None
 
     @property
     def registry(self):
@@ -315,7 +376,7 @@ class Agent:
         logger.info(f"LLM request: {len(messages)} msgs, ~{est_tokens} tokens")
 
         registry = get_registry()   # always live
-        tools = registry.get_openai_tools() if self._use_tools else []
+        tools = registry.get_openai_tools(groups=self._active_groups) if self._use_tools else []
         if tools:
             logger.debug(f"llm_request: passing {len(tools)} tools to API: {[t['function']['name'] for t in tools]}")
 
@@ -377,6 +438,10 @@ class Agent:
         # Never compress mid-loop. If the previous run left a background
         # compression in flight, wait for it so we append to a stable context.
         await self.messages.await_compression()
+
+        # Deterministically scope the prompt fragments and tools for this run.
+        if self._use_tools and initial_user_request:
+            self._plan_for_run(initial_user_request)
 
         # Add user message to context
         if initial_user_request:

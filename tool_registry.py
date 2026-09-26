@@ -25,6 +25,7 @@ class ToolDef:
     parameters: dict = field(default_factory=dict)
     module_name: str = ""
     timeout: float = DEFAULT_TOOL_TIMEOUT
+    group: str = "general"
 
 
 class ToolRegistry:
@@ -64,6 +65,7 @@ class ToolRegistry:
         name: str,
         description: str,
         parameters: Optional[dict] = None,
+        group: str = "general",
     ) -> Callable:
         """Decorator to register an async tool function."""
         def wrapper(func: Callable) -> Callable:
@@ -73,21 +75,23 @@ class ToolRegistry:
             self._tools[name] = ToolDef(
                 name=name, description=description,
                 func=func, parameters=parameters or {}, module_name=module_name,
+                group=group,
             )
             self._version += 1
-            logger.debug(f"Registered tool: {name} from {module_name}")
+            logger.debug(f"Registered tool: {name} [{group}] from {module_name}")
             return func
         return wrapper
 
 
     def register_function(
         self, func: Callable, name: str, description: str,
-        parameters: Optional[dict] = None,
+        parameters: Optional[dict] = None, group: str = "general",
     ) -> None:
         module_name = func.__module__
         self._tools[name] = ToolDef(
             name=name, description=description,
             func=func, parameters=parameters or {}, module_name=module_name,
+            group=group,
         )
 
 
@@ -107,11 +111,16 @@ class ToolRegistry:
         return float(default)
 
 
-    def get_openai_tools(self) -> list[dict]:
+    def get_openai_tools(self, groups: Optional[set] = None) -> list[dict]:
+        """Return tool schemas, optionally restricted to a set of groups.
+
+        ``groups=None`` returns every tool (legacy behaviour). Unknown group
+        names are ignored.
+        """
         tools = []
-        names = []
         for tdef in self._tools.values():
-            names.append(tdef.name)
+            if groups is not None and tdef.group not in groups:
+                continue
             tools.append({
                 "type": "function",
                 "function": {
@@ -121,6 +130,21 @@ class ToolRegistry:
                 }
             })
         return tools
+
+    def groups(self) -> list[str]:
+        """All registered group names, sorted."""
+        return sorted({t.group for t in self._tools.values()})
+
+    def tools_in_groups(self, groups: Optional[set] = None) -> list[str]:
+        """Names of tools belonging to ``groups`` (all tools when None)."""
+        return [
+            t.name for t in self._tools.values()
+            if groups is None or t.group in groups
+        ]
+
+    def group_of(self, name: str) -> Optional[str]:
+        tdef = self._tools.get(name)
+        return tdef.group if tdef else None
 
     async def call_tool(self, tool_name: str, **kwargs: Any) -> str:
         tdef = self._tools.get(tool_name)

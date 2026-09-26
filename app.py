@@ -212,18 +212,11 @@ async def start_app() -> None:
         save_history=False,
     )
 
-    # Main agent
+    # Main agent. Prompt fragments + tool groups are selected per run by the
+    # deterministic instruction planner (lib/instruction_planner.py), so no
+    # fixed base prompts are passed here.
     global agent
-    agent = Agent(
-        base_prompts=[
-            ("## **IDENTITY**\n", "system_prompts/core.md"),
-            ("\n## **WINDOWS DESKTOP**\n", "system_prompts/desktop.md"),
-            ("\n## **Tools Guidelines & Best Practices**\n", "system_prompts/tools_guidelines.md"),
-            ("\n## **Learning**\n", "system_prompts/learning.md"),
-        ],
-        use_tools=True,
-        save_history=True,
-    )
+    agent = Agent(use_tools=True, save_history=True)
     agent.add_helper_agent(helper_agent)
 
     logger.info("Starting worker and console command loop...")

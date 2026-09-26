@@ -689,8 +689,11 @@ TOOL_DEFINITIONS = [
 ]
 
 
+GROUP = "fs"
+
+
 def register_all(registry):
     """Register all file system tools with the given registry."""
     for name, func, desc, params in TOOL_DEFINITIONS:
-        registry.register_function(func, name, desc, params)
+        registry.register_function(func, name, desc, params, group=GROUP)
     logger.info(f"Registered {len(TOOL_DEFINITIONS)} FS tools")

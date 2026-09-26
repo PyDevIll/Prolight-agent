@@ -215,7 +215,10 @@ TOOL_DEFINITIONS = [
 ]
 
 
+GROUP = "mouse"
+
+
 def register_all(registry):
     for name, func, desc, params in TOOL_DEFINITIONS:
-        registry.register_function(func, name, desc, params)
+        registry.register_function(func, name, desc, params, group=GROUP)
     logger.info(f"Registered {len(TOOL_DEFINITIONS)} mouse tool(s)")

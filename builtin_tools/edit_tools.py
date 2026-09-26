@@ -1161,8 +1161,11 @@ TOOL_DEFINITIONS = [
 ]
 
 
+GROUP = "edit"
+
+
 def register_all(registry):
     """Register all edit tools with the given registry."""
     for name, func, desc, params in TOOL_DEFINITIONS:
-        registry.register_function(func, name, desc, params)
+        registry.register_function(func, name, desc, params, group=GROUP)
     logger.info(f"Registered {len(TOOL_DEFINITIONS)} edit tools")

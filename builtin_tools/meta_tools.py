@@ -66,6 +66,33 @@ async def ask_user(question: str, options: list = None, timeout: float = 300.0,
     return json.dumps({"ok": True, "answer": answer}, ensure_ascii=False)
 
 
+async def enable_tools(groups: list = None) -> str:
+    """Unlock additional tool groups for the rest of this run.
+
+    The instruction planner exposes only the tool groups relevant to the current
+    phase. If the available set is not enough, enable the ones you need — the
+    extra tools become callable on your next step.
+
+    Args:
+        groups: group names to enable. Valid: perception, uia, vision, locate,
+            probe, mouse, keybd, learning, overlay, fs, edit.
+    """
+    from app import get_agent
+    from lib import instruction_planner as ip
+
+    agent = get_agent()
+    if agent is None:
+        return json.dumps({"ok": False, "error": "no agent running"}, ensure_ascii=False)
+    requested = [str(g).strip().lower() for g in (groups or []) if str(g).strip()]
+    unknown = [g for g in requested if g not in ip.ALL_GROUPS]
+    active = agent.enable_tool_group(requested)
+    logger.info(f"enable_tools: requested={requested} active={active}")
+    return json.dumps(
+        {"ok": True, "enabled": active, "unknown": unknown, "valid_groups": ip.ALL_GROUPS},
+        ensure_ascii=False,
+    )
+
+
 TOOL_DEFINITIONS = [
     ("ping", ping, "Simple ping/pong health check. Returns pong with current timestamp.", {
         "type": "object",
@@ -104,6 +131,19 @@ TOOL_DEFINITIONS = [
         },
         "required": ["question"],
     }),
+    ("enable_tools", enable_tools, "Unlock additional tool groups for the rest of "
+     "this run if the currently available tools are not enough.", {
+        "type": "object",
+        "properties": {
+            "groups": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Groups to enable: perception, uia, vision, locate, "
+                               "probe, mouse, keybd, learning, overlay, fs, edit",
+            },
+        },
+        "required": ["groups"],
+    }),
     ("reload_tools", reload_tools, "Hot-reload all builtin tool modules without restarting", {
         "type": "object",
         "properties": {},
@@ -112,9 +152,12 @@ TOOL_DEFINITIONS = [
 ]
 
 
+GROUP = "meta"
+
+
 def register_all(registry):
     for name, func, desc, params in TOOL_DEFINITIONS:
-        registry.register_function(func, name, desc, params)
+        registry.register_function(func, name, desc, params, group=GROUP)
     # ask_user blocks on a human; give it a longer cap than the 120s default
     # so its documented 300s timeout is actually honoured.
     registry.set_timeout("ask_user", 600.0)
