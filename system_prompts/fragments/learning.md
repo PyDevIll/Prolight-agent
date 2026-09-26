@@ -19,22 +19,23 @@ what they do.
   approximate (windows move/resize).
 
 **Before your first real interaction with an app:** call
-`load_interaction_guide(hwnd=...)`.
-- If a guide is returned, read it and follow it.
-- If not, do a **discovery pass**, then save a guide:
-  1. `win_snapshot(hwnd=...)` — identify the main areas (menu, toolbar/ribbon,
-     panes, editor, status bar) and the controls it exposes.
-  2. `vision_look(...)` on the whole window and on areas that look important, to
-     understand their purpose.
-  3. `screen_probe(x, y, action="hover")` on controls of interest — a safe
-     BEFORE/AFTER pixel diff (tooltips, highlights) with **no** state change.
-     Use `action="scroll"` to check whether an area is scrollable.
-  4. **Ask before anything that could change state.** Use
-     `ask_user(question, options=[...])` before clicking a control whose effect
-     you are unsure of; only click with `screen_probe(..., action="click",
-     undo_hotkey="ctrl+z")` after the user agrees.
-  5. `save_interaction_guide(name=<key>, content=<general guide>)`.
-  6. Tell the user what you recorded and ask them to correct it.
+`load_app_profile(hwnd=...)` (structured) or `load_interaction_guide(hwnd=...)`.
+- If a profile/guide is returned, read it and follow it — the runtime
+  auto-injects the matched state and resolves named controls to live ids.
+- If not, run **`discover_app(hwnd=...)`**: it deterministically snapshots the
+  window and writes `<key>.profile.json` (**trigger, state detect rules, named
+  controls, footprint**) plus a starting `<key>.md` — no guesswork, no blind
+  clicking. Then:
+  1. review/rename the controls, and add purposes you can infer from names;
+  2. use `vision_look` / `screen_probe(action="hover")` only for purposes the
+     names do not reveal (hover is a safe BEFORE/AFTER diff, no state change);
+  3. **ask the user** (`ask_user`) to confirm the guide/state, then refine the
+     `.md`; the profile already routes the app at runtime.
+- Re-run `discover_app` after the app's layout changes so detect rules and
+  footprints stay accurate.
+
+Action it deterministically with `execute_app_control(name=..., action="click")`
+(or `resolve_app_control(name)` to get the id and act yourself).
 
 Template: `Purpose · Window & focus · Main areas (and purpose) · Key controls ·
 Shortcuts · Reading app state · Gotchas · Last verified`.
