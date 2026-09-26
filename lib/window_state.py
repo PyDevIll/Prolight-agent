@@ -134,6 +134,15 @@ class WindowState:
             "controls": len(self.controls),
             "texts": len(self.texts),
             "menu": len(self.menu),
+            # Actionable controls' current labels: two captures with identical
+            # stable keys but a changed label (e.g. a connect toggle flipping
+            # "Подключиться" → "Подключено") are *different* states.
+            "signature": sorted(
+                ([e.stable_key(), e.control_type, e.name]
+                 for e in self.controls
+                 if (e.control_type or "").lower() in _ACTIONABLE),
+                key=lambda x: x[0],
+            ),
         }
         if with_rects:
             rel = {}

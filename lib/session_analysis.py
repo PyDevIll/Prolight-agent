@@ -79,7 +79,7 @@ def rebuild_state(rec: dict) -> ws.WindowState:
 
 # ── segmentation ──────────────────────────────────────────────────────────
 def layout_diff(a: dict, b: dict) -> tuple:
-    """``(key-set difference ratio, fraction of common controls that moved)``."""
+    """``(key-set diff, fraction of common controls that moved, name changes)``."""
     ka = set(a.get("stable_keys") or [])
     kb = set(b.get("stable_keys") or [])
     union = ka | kb
@@ -94,12 +94,16 @@ def layout_diff(a: dict, b: dict) -> tuple:
             cb = ((rb[k][0] + rb[k][2]) / 2, (rb[k][1] + rb[k][3]) / 2)
             if abs(ca[0] - cb[0]) > MOVE_TOL or abs(ca[1] - cb[1]) > MOVE_TOL:
                 moved += 1
-    return key_diff, (moved / common if common else 0.0)
+    sa = {s[0]: s for s in ((a.get("footprint") or {}).get("signature") or [])}
+    sb = {s[0]: s for s in ((b.get("footprint") or {}).get("signature") or [])}
+    name_changed = sum(1 for k in set(sa) & set(sb)
+                       if (sa[k][2] or "") != (sb[k][2] or ""))
+    return key_diff, (moved / common if common else 0.0), name_changed
 
 
 def layout_changed(a: dict, b: dict) -> bool:
-    kd, mf = layout_diff(a, b)
-    return kd > SEG_KEY_DIFF or mf > SEG_MOVED_FRAC
+    kd, mf, nc = layout_diff(a, b)
+    return kd > SEG_KEY_DIFF or mf > SEG_MOVED_FRAC or nc > 0
 
 
 def _segment(recs: list) -> list:
@@ -153,11 +157,42 @@ def _derive_state(segment: list, include_ocr: bool = True) -> dict:
     if menu_names:
         detect["menu_all"] = menu_names[:6]
     text = discovery.summary_text(state, discovery.classify_regions(state))
+    signature = []
+    for cd in rep.get("controls", []):
+        ct = (cd.get("type") or "").lower()
+        if ct in ws._ACTIONABLE:
+            el = ws.Element(id="", kind="control", name=cd.get("name", ""),
+                            control_type=cd.get("type", ""), automation_id=cd.get("automation_id", ""))
+            signature.append([el.stable_key(), cd.get("type", ""), cd.get("name", "")])
+    signature.sort(key=lambda x: x[0])
     return {
         "_state": state, "_rep": rep, "detect": detect, "controls": controls, "text": text,
         "footprint": state.footprint(with_rects=True), "capture_id": rep.get("capture_id"),
-        "captures": [r.get("capture_id") for r in segment],
+        "captures": [r.get("capture_id") for r in segment], "_sig": signature,
     }
+
+
+def _sharpen_variants(states: list) -> None:
+    """Make same-layout/different-label states distinguishable.
+
+    If two states share a stable key but the actionable control's label differs
+    (a toggle like *Подключиться* → *Подключено*), require each state's own label
+    via ``uia_all`` so the router cannot match the wrong variant.
+    """
+    for i in range(len(states)):
+        for j in range(i + 1, len(states)):
+            a, b = states[i], states[j]
+            sa = {s[0]: s for s in (a.get("_sig") or [])}
+            sb = {s[0]: s for s in (b.get("_sig") or [])}
+            for k in set(sa) & set(sb):
+                na, nb = (sa[k][2] or ""), (sb[k][2] or "")
+                if not na or not nb or na == nb:
+                    continue
+                for st, s in ((a, sa[k]), (b, sb[k])):
+                    rule = {"control_type": s[1], "name": s[2]}
+                    ua = st["detect"].setdefault("uia_all", [])
+                    if rule not in ua:
+                        ua.append(rule)
 
 
 def _footprint_similar(a: dict, b: dict) -> float:
@@ -172,6 +207,12 @@ def _footprint_similar(a: dict, b: dict) -> float:
         return 1.0
     j = len(ka & kb) / len(union)
     if j < 0.6:
+        return 0.0
+    # A changed actionable label (e.g. a toggle) means a different state even
+    # when every stable key and rect is identical.
+    sa = {s[0]: s for s in (a.get("signature") or [])}
+    sb = {s[0]: s for s in (b.get("signature") or [])}
+    if any((sa[k][2] or "") != (sb[k][2] or "") for k in set(sa) & set(sb)):
         return 0.0
     ra = a.get("rel_rects") or {}
     rb = b.get("rel_rects") or {}
@@ -398,7 +439,9 @@ def analyze_session(session_dir, label: str = "", save: bool = True,
         for segment in _segment(rs):
             d = _derive_state(segment, include_ocr=include_ocr)
             states.append(d)
-        derived_by_key[key] = _dedup(states)
+        states = _dedup(states)
+        _sharpen_variants(states)
+        derived_by_key[key] = states
 
     merges = []
     if save:

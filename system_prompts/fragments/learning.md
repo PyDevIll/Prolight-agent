@@ -80,7 +80,10 @@ To learn a workflow the user performs:
    (controls, menu, OCR text, stable keys, window-relative footprint) for the
    foreground window; app switches are tracked in order. The window where
    `/learn` was typed and shell/taskbar windows are ignored; a click is bound to
-   a state only when it belongs to the same app.
+   the next settled state of **its own** app (a click in app A whose target is
+   app B is buffered, not leaked). A toggle whose label flips (e.g.
+   `Подключиться`→`Подключено`) becomes a **separate state**, so replay won't
+   click it the wrong way.
 2. Ask the user to perform the task; observe (do not interfere).
 3. `stop_learning_session()` — returns the session directory with `events.jsonl`,
    `states.jsonl`, `app_timeline.json` and click screenshots.

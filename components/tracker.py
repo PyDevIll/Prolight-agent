@@ -246,7 +246,7 @@ def _settle(hwnd: int, is_web: bool) -> str:
     return "timeout"  # user decision: a non-settling window is accepted anyway
 
 
-def _capture_once(session: dict, loop, action: str, click: Optional[dict] = None) -> None:
+def _capture_once(session: dict, loop, action: str) -> None:
     fg = _foreground()
     hwnd = fg["hwnd"]
     if not hwnd or not winapi.is_window(hwnd):
@@ -275,21 +275,26 @@ def _capture_once(session: dict, loop, action: str, click: Optional[dict] = None
         logger.warning(f"tracker: capture failed for {hwnd}: {e}")
         return
     key = learning_db.resolve_app_key(hwnd=hwnd, title=fg["title"], process=fg["process"])
-    _emit_state(session, state, key, action, stability, click)
+    _emit_state(session, state, key, action, stability)
 
 
-def _emit_state(session: dict, state, key: str, action: str, stability: str,
-                click: Optional[dict] = None) -> None:
+def _emit_state(session: dict, state, key: str, action: str, stability: str) -> None:
     session["seq"] += 1
     cid = f"k{session['seq']}"
     fp = state.footprint(with_rects=True)
     win_proc = (state.window.get("process") or "").lower()
-    click_proc = (click.get("control_process") or click.get("process") or "") if click else ""
-    # Only bind a click to this state when it belongs to the SAME app — a click
-    # in app A that triggers a capture of app B must not leak into B's profile.
+    # Read the click at emit time (after the writer has enriched it) and bind it
+    # to this state only when it belongs to the SAME app. A click whose target
+    # is another app is BUFFERED (kept) and claimed by the next settled state of
+    # its own process — a click on app B while app A is foreground is not lost.
+    click = session.get("last_click") or {}
+    if click and time.time() - click.get("t", 0) > _SETTLE_MAX + 8:
+        click = {}
+        session["last_click"] = {}
+    click_proc = (click.get("control_process") or click.get("process") or "")
     same_app = (not click_proc) or (not win_proc) or (click_proc == win_proc)
     clicked = None
-    if click and same_app and time.time() - click.get("t", 0) <= _SETTLE_MAX + 6:
+    if click and same_app:
         c = dict(click.get("control") or {})
         if c:
             # stable_key is derived from the element identity (no profile needed);
@@ -309,6 +314,7 @@ def _emit_state(session: dict, state, key: str, action: str, stability: str,
                         c["id"] = e.id
                         break
             clicked = c
+            session["last_click"] = {}  # consumed by its own app's state
     typed = "".join(session.get("typed") or [])
     session["typed"] = []
     rec = {
@@ -370,17 +376,15 @@ def _capturer(session: dict) -> None:
         asyncio.set_event_loop(loop)
         time.sleep(_DEBOUNCE)
         if not session["stop"].is_set():
-            _capture_once(session, loop, "start", None)
+            _capture_once(session, loop, "start")
         while not session["stop"].is_set():
             if not session["dirty"].wait(timeout=0.5):
                 continue
             session["dirty"].clear()
-            click = session.get("last_click") or None
-            session["last_click"] = {}
             time.sleep(_DEBOUNCE)
             if session["stop"].is_set():
                 break
-            _capture_once(session, loop, session.get("last_action_kind") or "action", click)
+            _capture_once(session, loop, session.get("last_action_kind") or "action")
     finally:
         try:
             loop.close()

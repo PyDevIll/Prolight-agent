@@ -75,6 +75,13 @@ def _state_score(detect: dict, state) -> Optional[int]:
             return None
         score += 2
 
+    # uia_all: every spec must be present (used to tell apart same-layout states
+    # that differ only by a control's label, e.g. a connect/connected toggle).
+    for spec in detect.get("uia_all") or []:
+        if not any(_control_matches(c, spec) for c in uia):
+            return None
+        score += 2
+
     for needle in detect.get("menu_all") or []:
         if _norm(needle) not in menu:
             return None
