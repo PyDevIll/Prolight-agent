@@ -8,7 +8,7 @@ def register_all(registry):
         meta_tools, win_tools, vision_tools,
         search_tools, mouse_tools, keybd_tools, uia_tools,
         probe_tools, learning_tools, profile_tools, overlay_tools,
-        fs_tools, edit_tools, app_tools
+        fs_tools, edit_tools, app_tools, workflow_tools
     )
     meta_tools.register_all(registry)
     win_tools.register_all(registry)
@@ -24,4 +24,5 @@ def register_all(registry):
     fs_tools.register_all(registry)
     edit_tools.register_all(registry)
     app_tools.register_all(registry)
+    workflow_tools.register_all(registry)
     logger.info("All builtin tools registered")

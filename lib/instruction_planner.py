@@ -40,6 +40,7 @@ FRAGMENT_GROUPS: dict[str, set] = {
     "uia": {"uia"},
     "probe": {"probe"},
     "learning": {"learning"},
+    "workflow": {"workflow"},
     "files": {"fs", "edit"},
     "apps": {"apps"},
     "overlay": {"overlay"},
@@ -54,6 +55,8 @@ PHASE_FRAGMENTS: dict[str, list[str]] = {
     "act":      ["uia", "actuation", "locate", "vision", "overlay", "learning", "apps"],
     "files":    ["files"],
     "learn":    ["learning", "files"],
+    "workflow": ["workflow", "learning", "uia", "actuation", "locate", "vision",
+                 "apps", "overlay"],
 }
 
 _PROMPT_PREFIX = "[Command prompt]:"
@@ -112,6 +115,14 @@ def detect_phase(ctx: PlannerContext) -> str:
         return "learn"
     if "learn" in p and "workflow" in p:
         return "learn"
+    # Explicit "follow/run a learned workflow".
+    if any(k in p for k in ("run workflow", "follow workflow", "run the workflow",
+                            "follow the workflow", "execute workflow", "start workflow",
+                            "resume workflow", "continue workflow", "workflow step",
+                            "follow the guide")) or \
+       ("workflow" in p and any(k in p for k in ("run", "follow", "execute", "resume",
+                                                 "continue", "start", "again"))):
+        return "workflow"
     # Explicit app exploration.
     if any(k in p for k in ("discover", "explore", "figure out")) or \
        ("learn" in p and "app" in p):

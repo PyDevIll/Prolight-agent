@@ -4,8 +4,11 @@ Turns a recorded learning session (``data/sessions/<label>_<ts>/``) into:
 
   * **per-app profile extensions** (``interaction_guides/<key>.profile.json``) —
     new states, refreshed footprints and merged named controls, deterministically;
-  * a **cross-app workflow draft** (``workflows/<task>.md``) whole steps reference
-    the app (guide key), the state and a named control — not pixels.
+  * a **cross-app workflow draft** (``workflows/<task>.md``) whose steps reference
+    the app (guide key), the state and a named control — not pixels;
+  * a machine-readable **workflow program** (``workflows/<task>.workflow.json``)
+    that the deterministic runner (``lib.workflow_runner``) can execute step by
+    step, with no LLM call for the resolved steps.
 
 No LLM call: ``discover``/``router`` primitives are reused. The agent/user then
 confirms and refines the prose. ``capsules`` in ``states.jsonl`` are rebuilt into
@@ -283,6 +286,7 @@ def merge_profile(key: str, derived: list, window: dict) -> dict:
         prof["trigger"]["process"].append(proc)
 
     added_states = refreshed = added_controls = 0
+    capture_map: dict = {}
     for d in derived:
         wstate = d["_state"]
         match = None
@@ -314,6 +318,8 @@ def merge_profile(key: str, derived: list, window: dict) -> dict:
             if not match.get("text") and d.get("text"):
                 match["text"] = d["text"]
             refreshed += 1
+        for cid in d.get("captures") or []:
+            capture_map[cid] = sid
 
     prof["updated"] = date.today().isoformat()
     path = profiles.save(key, prof)
@@ -325,7 +331,8 @@ def merge_profile(key: str, derived: list, window: dict) -> dict:
         logger.warning(f"session_analysis: could not seed guide for {key}: {e}")
     return {"key": key, "path": str(path), "guide_path": guide_path,
             "states_added": added_states, "states_refreshed": refreshed,
-            "controls_added": added_controls, "states_total": len(prof["states"])}
+            "controls_added": added_controls, "states_total": len(prof["states"]),
+            "capture_states": capture_map}
 
 
 # ── workflow draft ────────────────────────────────────────────────────────
@@ -416,6 +423,105 @@ def build_workflow(label: str, timeline: list, derived_by_key: dict, records_by_
     return "\n".join(lines)
 
 
+# ── workflow program (executable sidecar) ─────────────────────────────────
+def build_workflow_program(label: str, timeline: list, derived_by_key: dict,
+                           records_by_id: dict, session_dir: str = "",
+                           include_ocr: bool = True, capture_states: dict = None) -> dict:
+    """Deterministically derive an **executable** workflow program from a session.
+
+    Every step references an ``app`` (guide key), an optional guard ``state`` and
+    (for actions) a named ``control`` — never pixels:
+
+      * a ``focus`` step is emitted at each app switch;
+      * ``start`` captures become ``assert_state`` guards;
+      * a recorded click/keypress becomes a ``click``/``type``/``key`` step whose
+        guard ``state`` is the app's *previous* state (an action is performed
+        while in the state before it);
+      * when the action changes the app's state, a ``wait_state`` step verifies
+        the effect (the captured post-action state).
+
+    An action whose control could not be named carries ``unresolved: true`` and
+    the recorded ``expected`` label, so the runner hands that step to the LLM.
+    """
+    slug = (learning_db.normalize_key(label or "learned task") or "learned_task")
+    apps: list = []
+    steps: list = []
+    prev_app = None
+    prev_state: dict = {}
+
+    def add(**kw) -> None:
+        kw.setdefault("app", "")
+        steps.append(kw)
+
+    for seg in timeline:
+        app = seg.get("guide_key") or "unnamed"
+        if app not in apps:
+            apps.append(app)
+        if app != prev_app:
+            add(app=app, action="focus")
+            prev_app = app
+        states = derived_by_key.get(app, [])
+        for cid in (seg.get("captures") or []):
+            rec = records_by_id.get(cid)
+            if not rec:
+                continue
+            sid = (capture_states or {}).get(cid) or _state_id_for(states, cid)
+            action = rec.get("action") or "action"
+            before = prev_state.get(app)
+            if action == "start":
+                add(app=app, action="assert_state", state=sid)
+            elif action == "click":
+                cname = _control_name(states, cid, rec.get("clicked") or {})
+                step = {"app": app, "action": "click"}
+                if before:
+                    step["state"] = before
+                if cname:
+                    step["control"] = cname
+                else:
+                    step["control"] = ""
+                    step["unresolved"] = True
+                    step["expected"] = (rec.get("clicked") or {}).get("name", "")
+                add(**step)
+            elif action == "key":
+                typed = (rec.get("typed") or "").strip()
+                step = {"app": app, "action": "type" if typed else "key"}
+                if before:
+                    step["state"] = before
+                if typed:
+                    step["text"] = typed
+                else:
+                    step["unresolved"] = True
+                add(**step)
+            elif action == "focus":
+                add(app=app, action="focus")
+            else:
+                step = {"app": app, "action": action}
+                if before:
+                    step["state"] = before
+                add(**step)
+            if action != "start" and sid and sid != before:
+                add(app=app, action="wait_state", state=sid, timeout_s=8)
+            prev_state[app] = sid
+
+    for i, st in enumerate(steps, 1):
+        st["id"] = f"s{i}"
+
+    windows: dict = {}
+    for seg in timeline:
+        windows.setdefault(seg.get("guide_key") or "unnamed", {
+            "title": seg.get("title") or "", "process": seg.get("process") or ""})
+    return {
+        "key": slug,
+        "title": label or "learned task",
+        "goal": "",
+        "source_session": str(session_dir or ""),
+        "apps": apps,
+        "windows": windows,
+        "preconditions": [],
+        "steps": steps,
+    }
+
+
 # ── entry point ───────────────────────────────────────────────────────────
 def analyze_session(session_dir, label: str = "", save: bool = True,
                     include_ocr: bool = True) -> dict:
@@ -444,24 +550,36 @@ def analyze_session(session_dir, label: str = "", save: bool = True,
         derived_by_key[key] = states
 
     merges = []
+    capture_states: dict = {}
     if save:
         for key, states in derived_by_key.items():
             window = (states[0]["_rep"].get("window") if states else {}) or {}
-            merges.append(merge_profile(key, states, window))
+            m = merge_profile(key, states, window)
+            merges.append(m)
+            capture_states.update(m.get("capture_states") or {})
 
     draft = build_workflow(label, timeline, derived_by_key, records_by_id)
-    # Write the full draft to a file so it is never truncated in a tool response.
+    program = build_workflow_program(label, timeline, derived_by_key, records_by_id,
+                                     session_dir=str(session_dir), include_ocr=include_ocr,
+                                     capture_states=capture_states)
+    # Write the full draft (prose + executable program) to files so neither is
+    # ever truncated in a tool response.
     workflow_path = None
+    program_path = None
     try:
         learning_db.ensure_dirs()
-        slug = learning_db.normalize_key(label or "learned task").replace(" ", "_") or "learned_task"
+        slug = program["key"]
         wf = learning_db.WORKFLOWS_DIR / f"_draft_{slug}.md"
         wf.write_text(draft, encoding="utf-8")
         workflow_path = str(wf)
+        wj = learning_db.WORKFLOWS_DIR / f"_draft_{slug}.workflow.json"
+        wj.write_text(json.dumps(program, ensure_ascii=False, indent=2), encoding="utf-8")
+        program_path = str(wj)
     except Exception as e:
         logger.warning(f"session_analysis: could not write workflow draft: {e}")
     logger.info(f"session_analysis: keys={list(derived_by_key)} "
-                f"states={ {k: len(v) for k, v in derived_by_key.items()} }")
+                f"states={ {k: len(v) for k, v in derived_by_key.items()} } "
+                f"steps={len(program['steps'])}")
     return {
         "ok": True,
         "session_dir": str(session_dir),
@@ -470,6 +588,9 @@ def analyze_session(session_dir, label: str = "", save: bool = True,
         "profile_merges": merges,
         "workflow_name": label or "learned task",
         "workflow_path": workflow_path,
+        "program_path": program_path,
+        "program_steps": len(program["steps"]),
+        "workflow_program": program,
         "workflow_preview": draft[:1200],
         "workflow_draft": draft[:2000],
     }
