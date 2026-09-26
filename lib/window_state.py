@@ -338,23 +338,34 @@ async def capture_state(
         proc = (state.window.get("process") or "").lower()
         is_chromium = any(b in proc for b in _CHROMIUM_PROC) or \
             "chrome_widgetwin" in (state.window.get("class") or "").lower()
-        if is_chromium and coverage in ("poor", "empty"):
-            winapi.send_getobject(hwnd)
-            child = winapi.find_child_by_class(hwnd, "Chrome_RenderWidgetHostHWND")
-            if child:
-                winapi.send_getobject(child)
-            await asyncio.sleep(1.0)
-            raw = await _enum_uia(hwnd, max_controls)
-            selected = _select_controls(raw)
-            state.uia_coverage = "good" if len(selected) >= 5 else ("poor" if selected else "empty")
-            state.accessibility_enabled = len(selected) >= 5
-            state.types = {}
-            for c in raw:
-                t = c.get("control_type") or "?"
-                state.types[t] = state.types.get(t, 0) + 1
+        if is_chromium:
+            # Chromium keeps renderer accessibility off until an AT client asks;
+            # a Document under the window is the reliable signal, independent of
+            # the (shallow) control-walk depth. The old len(selected)>=5 test
+            # reported "off" even when the page was exposed.
+            doc_count = await ui_tree.count_documents(hwnd)
+            if doc_count == 0 and coverage in ("poor", "empty"):
+                winapi.send_getobject(hwnd)
+                child = winapi.find_child_by_class(hwnd, "Chrome_RenderWidgetHostHWND")
+                if child:
+                    winapi.send_getobject(child)
+                await asyncio.sleep(1.0)
+                raw = await _enum_uia(hwnd, max_controls)
+                selected = _select_controls(raw)
+                coverage = "good" if len(selected) >= 5 else ("poor" if selected else "empty")
+                state.types = {}
+                for c in raw:
+                    t = c.get("control_type") or "?"
+                    state.types[t] = state.types.get(t, 0) + 1
+                doc_count = await ui_tree.count_documents(hwnd)
+            state.accessibility_enabled = doc_count > 0 or coverage == "good"
+            if doc_count > 0:
+                coverage = "good"
+            state.uia_coverage = coverage
             state.notes.append(
                 "chromium accessibility "
                 + ("enabled" if state.accessibility_enabled else "still off")
+                + (f" ({doc_count} document)" if doc_count else "")
             )
 
         for c in _rank_controls(selected)[:max_controls]:

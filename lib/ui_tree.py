@@ -230,27 +230,85 @@ def _set_text_sync(hwnd, name, control_type, automation_id, class_name, text, ma
         return {"ok": False, "error": f"cannot set text: {e}", "control": d}
 
 
-def _get_text_sync(hwnd, max_depth, max_controls, max_chars):
-    """Dump a window's accessible text (UIA TextPattern first, then names/values).
+def _text_of(el) -> str:
+    """One element's text: UIA TextPattern if usable, else value/name.
 
-    For Chromium documents ``TextPattern.GetText`` returns the whole page text,
-    so this reads a long list/thread without OCR.
+    Chromium's TextPattern binding under comtypes does not expose ``GetText``
+    (``AttributeError``), so the value/name fallback is the effective path for
+    a Chromium Document and its Text children.
     """
+    try:
+        iface = el.iface_text
+        if iface is not None:
+            t = iface.GetText(-1)
+            if t and t.strip():
+                return t.strip()
+    except Exception:
+        pass
+    try:
+        v = _value_of(el)
+        if v:
+            return v.strip()
+    except Exception:
+        pass
+    try:
+        return (el.element_info.name or "").strip()
+    except Exception:
+        return ""
+
+
+def _append_text(el, out: list) -> bool:
+    t = _text_of(el)
+    if t:
+        out.append(t)
+        return True
+    return False
+
+
+def _documents(root, limit: int = 4):
+    """Document elements under a window.
+
+    Chromium exposes a page as a ``Document`` subtree that sits well below a
+    native control (Window > Pane > ... > Document > Text); this finds it in one
+    server-side query regardless of depth.
+    """
+    try:
+        return list(root.descendants(control_type="Document"))[:limit]
+    except Exception:
+        return []
+
+
+def _get_text_sync(hwnd, max_depth, max_controls, max_chars):
+    """Dump a window's accessible text (UIA TextPattern, names/values, or the
+    Document subtree).
+
+    For Chromium the page content lives in a ``Document`` element too deep for
+    the default walk, so we target the Document and read its Text/Hyperlink
+    descendants by name — no OCR. Native apps fall back to the bounded walk.
+    """
+    _ensure_com()
     root = _root(hwnd)
-    raw = []
-    for el, depth in _walk(root, int(max_depth), int(max_controls)):
-        txt = ""
-        try:
-            txt = el.iface_text.GetText(-1) or ""
-        except Exception:
-            txt = ""
-        if not txt.strip():
-            d = _control_dict(el, depth)
-            txt = d.get("value") or d.get("name") or ""
-        if txt and txt.strip():
-            raw.append(txt.strip())
+    raw: list = []
+    docs = _documents(root)
+    if docs:
+        for doc in docs:
+            _append_text(doc, raw)
+            found = 0
+            for ct in ("Text", "Hyperlink", "Heading", "ListItem"):
+                try:
+                    for el in doc.descendants(control_type=ct):
+                        if _append_text(el, raw):
+                            found += 1
+                except Exception:
+                    pass
+            if found == 0:  # unknown provider: walk the document subtree
+                for el, _depth in _walk(doc, int(max_depth), int(max_controls)):
+                    _append_text(el, raw)
+    else:
+        for el, _depth in _walk(root, int(max_depth), int(max_controls)):
+            _append_text(el, raw)
     # Drop exact duplicates and any text already contained in a longer one
-    # (a document's text includes its children's), preserving tree order.
+    # (a container's text includes its children's), preserving tree order.
     uniq = list(dict.fromkeys(raw))
     kept = [t for t in uniq if not any(t != o and t in o for o in uniq)]
     text = "\n".join(kept)
@@ -260,6 +318,13 @@ def _get_text_sync(hwnd, max_depth, max_controls, max_chars):
         truncated = True
     return {"ok": True, "text": text, "characters": len(text),
             "truncated": truncated, "blocks": len(kept)}
+
+
+def _count_documents_sync(hwnd):
+    try:
+        return len(_documents(_root(hwnd), limit=20))
+    except Exception:
+        return 0
 
 
 def _element_at_point_sync(x, y):
@@ -329,6 +394,15 @@ async def get_text(
     return await _run(
         _get_text_sync, int(hwnd), max_depth, max_controls, max_chars, timeout=timeout
     )
+
+
+async def count_documents(hwnd: int, timeout: float = DEFAULT_TIMEOUT) -> int:
+    """Number of UIA ``Document`` elements under a window (0 if none).
+
+    A cheap, depth-independent way to tell whether a Chromium renderer is
+    exposing its page content through UIA (renderer accessibility on).
+    """
+    return await _run(_count_documents_sync, int(hwnd), timeout=timeout)
 
 
 async def element_at_point(x: int, y: int, timeout: float = DEFAULT_TIMEOUT) -> dict:

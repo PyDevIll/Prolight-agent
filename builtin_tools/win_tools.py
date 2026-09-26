@@ -309,8 +309,10 @@ async def win_read_text(
     cls = (info.get("class") or "").lower()
     is_chromium = any(b in proc for b in _CHROMIUM_PROC) or "chrome_widgetwin" in cls
 
+    # Chromium nests the page Document well below the default walk depth.
+    depth = 12 if is_chromium else ui_tree.DEFAULT_MAX_DEPTH + 1
     try:
-        result = await ui_tree.get_text(hwnd, max_chars=max_chars)
+        result = await ui_tree.get_text(hwnd, max_chars=max_chars, max_depth=depth)
     except Exception as e:
         result = {"ok": False, "error": str(e), "text": ""}
 
@@ -321,7 +323,7 @@ async def win_read_text(
             winapi.send_getobject(child)
         await asyncio.sleep(1.0)
         try:
-            result = await ui_tree.get_text(hwnd, max_chars=max_chars)
+            result = await ui_tree.get_text(hwnd, max_chars=max_chars, max_depth=depth)
         except Exception as e:
             result = {"ok": False, "error": str(e), "text": ""}
 

@@ -41,6 +41,7 @@ FRAGMENT_GROUPS: dict[str, set] = {
     "probe": {"probe"},
     "learning": {"learning"},
     "files": {"fs", "edit"},
+    "apps": {"apps"},
     "overlay": {"overlay"},
 }
 
@@ -49,8 +50,8 @@ ALL_GROUPS = sorted(set().union(*FRAGMENT_GROUPS.values()) | CORE_GROUPS)
 # ── phase → extra fragments (ALWAYS_FRAGMENTS are added automatically) ────
 PHASE_FRAGMENTS: dict[str, list[str]] = {
     "route":    ["learning"],
-    "discover": ["probe", "vision", "locate", "overlay", "learning"],
-    "act":      ["uia", "actuation", "locate", "vision", "overlay", "learning"],
+    "discover": ["probe", "vision", "locate", "overlay", "learning", "apps"],
+    "act":      ["uia", "actuation", "locate", "vision", "overlay", "learning", "apps"],
     "files":    ["files"],
     "learn":    ["learning", "files"],
 }
