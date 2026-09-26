@@ -98,6 +98,37 @@ def resolve_guide(
     }
 
 
+_BROWSER_PROCS = ("chrome", "msedge", "brave", "opera", "vivaldi", "chromium")
+
+
+def resolve_app_key(hwnd: Optional[int] = None, title: str = "", process: str = "") -> str:
+    """Best guide key for the app in a window — the create/extend target.
+
+    Resolution: an **existing** guide/profile for any candidate wins; otherwise a
+    browser's page/app is identified by the **title head**
+    (``"Telegram - Google Chrome"`` → ``telegram``) and a native app by the
+    **title tail** (``"Book1 - Microsoft Excel"`` → ``microsoft excel``); else the
+    process name. (Alias canonicalization is a later refinement.)
+    """
+    if hwnd and (not title or not process):
+        h = int(hwnd)
+        if not title:
+            title = winapi.get_window_text(h) or ""
+        if not process:
+            process = winapi.get_process_name(winapi.get_window_pid(h)) or ""
+    cands = guide_candidates(hwnd=hwnd, title=title, process=process)
+    for key in cands:
+        if (GUIDES_DIR / f"{key}.md").exists() or (GUIDES_DIR / f"{key}.profile.json").exists():
+            return key
+    segs = title_segments(title)
+    proc = normalize_key(process)
+    if any(b in proc for b in _BROWSER_PROCS) and len(segs) > 1:
+        return normalize_key(segs[0])
+    if segs:
+        return normalize_key(segs[-1])
+    return proc or (cands[-1] if cands else "unnamed")
+
+
 # ── guides ────────────────────────────────────────────────────────────────
 def read_guide(key: str) -> Optional[str]:
     path = GUIDES_DIR / f"{normalize_key(key)}.md"

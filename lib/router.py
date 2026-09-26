@@ -17,6 +17,9 @@ from typing import Optional
 
 from loguru import logger
 
+# fraction of the window a control may drift before it counts as "moved"
+_MOVE_TOL = 0.12
+
 
 def _norm(s) -> str:
     return " ".join((s or "").split()).strip().lower()
@@ -145,14 +148,45 @@ def resolve_named(profile: dict, state, name: str) -> Optional[dict]:
 
 
 def _verify_footprint(profile: dict, state_id: Optional[str], state) -> dict:
-    fps = (profile.get("footprints") or {}).get(state_id or "")
-    stored = (fps or {}).get("keys") or []
+    """Compare the stored footprint with the live state (presence + placement).
+
+    ``footprint_ok`` is the presence check; ``moved_keys``/``layout_changed``
+    catch controls that still exist but were **placed** differently — i.e. the
+    app's layout changed even though its controls did not disappear.
+    """
+    fps = (profile.get("footprints") or {}).get(state_id or "") or {}
+    stored = fps.get("keys") or []
     if not stored:
-        return {"footprint_ok": None, "missing_keys": []}
+        return {"footprint_ok": None, "missing_keys": [], "moved_keys": [], "layout_changed": None}
     current = set(state.stable_keys())
     missing = [k for k in stored if k not in current]
     ok = len(missing) <= max(1, len(stored) // 2)
-    return {"footprint_ok": ok, "missing_keys": missing}
+
+    moved: list = []
+    layout_changed = None
+    rel = fps.get("rel_rects") or {}
+    wrect = (state.window or {}).get("rect")
+    if rel and wrect and wrect.get("right", 0) > wrect.get("left", 0):
+        w = wrect["right"] - wrect["left"]
+        h = wrect["bottom"] - wrect["top"]
+        cur = {}
+        for e in state.all_elements():
+            if e.rect:
+                l, t, r, b = e.rect
+                cur[e.stable_key()] = [(l - wrect["left"]) / w, (t - wrect["top"]) / h,
+                                       (r - wrect["left"]) / w, (b - wrect["top"]) / h]
+        present = 0
+        for k, box in rel.items():
+            if k in cur:
+                present += 1
+                ca = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+                cb = ((cur[k][0] + cur[k][2]) / 2, (cur[k][1] + cur[k][3]) / 2)
+                if abs(ca[0] - cb[0]) > _MOVE_TOL or abs(ca[1] - cb[1]) > _MOVE_TOL:
+                    moved.append(k)
+        if present:
+            layout_changed = len(moved) >= max(1, present // 2)
+    return {"footprint_ok": ok, "missing_keys": missing,
+            "moved_keys": moved, "layout_changed": layout_changed}
 
 
 # ── route + injection text ────────────────────────────────────────────────
@@ -199,6 +233,10 @@ def volatile_text(result: dict, profile: Optional[dict] = None) -> str:
     if result.get("footprint_ok") is False:
         lines.append("\n⚠ profile footprint mismatch (missing: "
                      + ", ".join(result.get("missing_keys", [])[:5]) + ") — re-snapshot before acting.")
+    if result.get("layout_changed"):
+        lines.append("\n⚠ layout changed since this profile was learned (moved: "
+                     + ", ".join(result.get("moved_keys", [])[:5])
+                     + ") — verify control positions before acting (re-run discover_app if it persists).")
     if controls:
         lines.append("\nAct on these ids directly (`win_click_control(id=...)` / `mouse_click(id=...)`); "
                      "call `win_changes()` first if the screen may have changed.")

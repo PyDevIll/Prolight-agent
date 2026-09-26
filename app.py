@@ -12,6 +12,7 @@ from builtin_tools import register_all as register_builtin_tools
 from tool_registry import get_registry
 from lib.console import force_utf8_console
 from lib import overlay
+from components import tracker
 
 # Data directory (screenshots, logs, context saves)
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -138,6 +139,27 @@ async def get_command() -> None:
                 logger.info("Compress requested")
                 await request_queue.put({"type": "compress"})
                 continue
+            if user_request == "/learn" or user_request.startswith("/learn "):
+                # Deterministic learning control (no LLM): record the user's
+                # actions, then summarize into profiles/workflow.
+                arg = user_request[len("/learn"):].strip()
+                if arg.lower() in ("stop", "end", "off"):
+                    res = tracker.stop()
+                    if res.get("ok"):
+                        print(f" > learning stopped: {res['states']} step(s), "
+                              f"{res['clicks']} click(s) — {res['dir']}", flush=True)
+                        print(" > ask the agent to 'summarize the learning session' to build "
+                              "the profile + workflow draft.", flush=True)
+                    else:
+                        print(f" > {res.get('error')}", flush=True)
+                else:
+                    res = tracker.start(arg)
+                    if res.get("ok"):
+                        print(f" > learning started: '{res['label']}' — perform the task in the "
+                              f"app, then type /learn stop", flush=True)
+                    else:
+                        print(f" > {res.get('error')}", flush=True)
+                continue
 
             # A pending ask_user question consumes the next line as its answer.
             if _pending_question is not None and not _pending_question.done():
@@ -196,7 +218,12 @@ async def start_app() -> None:
         try:
             return await _orig_call_tool(tool_name, **kwargs)
         finally:
-            overlay.set_status("thinking", "thinking")
+            # Don't overwrite the recording indicator while learning.
+            st = tracker.overlay_status()
+            if st:
+                overlay.set_status(st[0], st[1])
+            else:
+                overlay.set_status("thinking", "thinking")
 
     registry.call_tool = _call_tool_with_overlay
 
@@ -224,6 +251,8 @@ async def start_app() -> None:
     command_task = asyncio.create_task(get_command())
 
     logger.info("All components started. Awaiting tasks...")
+    print("Commands: /learn [label] start recording · /learn stop finish · "
+          "/compress · /q quit", flush=True)
     # worker() never returns on its own, so wait for whichever finishes first
     # (quit/EOF from the console, or an unexpected worker failure), then stop
     # the other one instead of hanging in gather().

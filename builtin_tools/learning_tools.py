@@ -15,7 +15,7 @@ from typing import Optional
 from loguru import logger
 
 from components import tracker
-from lib import learning_db
+from lib import learning_db, session_analysis
 
 
 def _dump(obj) -> str:
@@ -111,8 +111,29 @@ async def start_learning_session(label: str = "") -> str:
 
 
 async def stop_learning_session() -> str:
-    """Stop the recording and return the session summary (events, clicks, screenshots)."""
+    """Stop the recording and return the session summary (events, states, apps)."""
     result = tracker.stop()
+    return _dump(result)
+
+
+async def summarize_learning_session(session_dir: str = "", label: str = "", save: bool = True) -> str:
+    """Deterministically turn a recorded session into profiles + a workflow draft.
+
+    Rebuilds the settled ``WindowState`` captures, extends each app's profile
+    (additive: new states, refreshed footprints, merged named controls) and
+    returns a cross-app workflow draft whose steps reference the app, state and
+    named control. No LLM call — review the draft, then ``save_workflow``.
+
+    Args:
+        session_dir: session folder (default: the most recent session).
+        label: workflow/label name for the draft.
+        save: merge the observed states into the per-app profiles.
+    """
+    if not session_dir:
+        session_dir = tracker.latest() or ""
+    if not session_dir:
+        return _dump({"ok": False, "error": "no session directory (nothing recorded yet)"})
+    result = session_analysis.analyze_session(session_dir, label=label, save=save)
     return _dump(result)
 
 
@@ -226,8 +247,25 @@ TOOL_DEFINITIONS = [
         "stop_learning_session",
         stop_learning_session,
         "Stop the learning recording and return the session summary (events, "
-        "clicks, screenshots) so you can summarize it into a workflow.",
+        "settled states, app segments) so you can summarize it into a workflow.",
         {"type": "object", "properties": {}, "required": []},
+    ),
+    (
+        "summarize_learning_session",
+        summarize_learning_session,
+        "Deterministically summarize a recorded learning session: extends each "
+        "app's profile with observed states/footprints/controls and returns a "
+        "cross-app workflow draft (apps in order, steps referencing state + named "
+        "control). Review the draft, then save_workflow.",
+        {
+            "type": "object",
+            "properties": {
+                "session_dir": {"type": "string", "description": "Session folder (default: most recent)"},
+                "label": {"type": "string", "description": "Workflow/label name for the draft"},
+                "save": {"type": "boolean", "description": "Merge observed states into the per-app profiles (default true)"},
+            },
+            "required": [],
+        },
     ),
 ]
 

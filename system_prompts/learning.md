@@ -39,29 +39,31 @@ what they do.
 Template: `Purpose · Window & focus · Main areas (and purpose) · Key controls ·
 Shortcuts · Reading app state · Gotchas · Last verified`.
 
-### Workflows — `workflows/<task>.md`
-A repeatable procedure that spans apps/windows to reach a goal (e.g. "process an
-incoming invoice request"). A workflow describes the **goal**, the **apps**
-involved, the **ordered steps**, the **decision points**, and any **follow-up
-check**.
+### Workflows — `workflows/<task>.md` (CROSS-APP)
+A repeatable procedure that **switches between several apps** to reach a goal
+(e.g. "process an incoming invoice request"). A workflow records the **apps in
+order** and delegates per-app detail to that app's guide/profile — steps
+reference the app (guide key), the **state** and a named control, not pixels.
 
 - Before a task, call `find_workflow(query=<task description>)`; if a workflow
-  matches, `load_workflow(name)` and follow it (adapt to what you actually see).
+  matches, `load_workflow(name)` and follow it (re-routing as you switch apps).
 - After completing a task that is likely to recur — or when the user teaches you
   one — `save_workflow(name, content)`.
 
 ### Learning mode (recording the user)
 To learn a workflow the user performs:
-1. `start_learning_session(label="<task>")` — starts recording the user's real
-   mouse/keyboard actions; on every click it also captures the whole window and
-   the control under the cursor.
+1. `start_learning_session(label="<task>")` — records the user's real
+   mouse/keyboard actions and, **after each action, a settled `WindowState`**
+   (controls, menu, OCR text, stable keys, window-relative footprint) for the
+   foreground window; app switches are tracked in order.
 2. Ask the user to perform the task; observe (do not interfere).
-3. `stop_learning_session()` — returns the session directory with `events.jsonl`
-   and click screenshots.
-4. Read the recording (use `fs_read`/`fs_grep`) and summarize it into a workflow:
-   ordered steps, apps, decision points.
-5. `save_workflow(...)`, then `ask_user(...)` to confirm it is correct before
-   relying on it.
+3. `stop_learning_session()` — returns the session directory with `events.jsonl`,
+   `states.jsonl`, `app_timeline.json` and click screenshots.
+4. `summarize_learning_session(label=...)` — deterministically (no LLM) extends
+   each app's profile with the observed **states** (new layouts, refreshed
+   footprints, merged named controls) and returns a **cross-app workflow draft**
+   (apps in order, steps referencing `state` + named control).
+5. Review the draft, `save_workflow(...)`, then `ask_user(...)` to confirm.
 
 ### Heartbeat
 A workflow may define a deferred/repeating self-check (e.g. "wait for the
