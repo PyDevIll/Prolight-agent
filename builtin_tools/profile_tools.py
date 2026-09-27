@@ -64,28 +64,173 @@ async def load_app_profile(
     })
 
 
-async def save_app_profile(name: str, profile: str = "", profile_json: str = "") -> str:
-    """Create or replace an app profile (``interaction_guides/<name>.profile.json``).
+def _as_obj(value):
+    """Accept a dict/list or a JSON string for a delta argument."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception:
+            return None
+    return value
+
+
+def _as_list(value):
+    if value is None:
+        return []
+    if isinstance(value, str):
+        s = value.strip()
+        if s.startswith("[") or s.startswith("{"):
+            try:
+                v = json.loads(s)
+            except Exception:
+                return [value]
+            return v if isinstance(v, list) else [v]
+        return [value]
+    return value if isinstance(value, list) else [value]
+
+
+def _unique_state_id(prof: dict) -> str:
+    ids = {s.get("id") for s in prof.get("states") or []}
+    if not ids:
+        return "main"
+    i = len(ids) + 1
+    while f"state_{i}" in ids:
+        i += 1
+    return f"state_{i}"
+
+
+def _merge_delta(prof: dict, *, add_state=None, patch_state=None, remove_state=None,
+                 patch_trigger=None, set_initial_text=None) -> tuple:
+    """Apply typed deltas to ``prof`` in place. Returns ``(diff, error)`` (R23)."""
+    prof.setdefault("trigger", {})
+    prof.setdefault("states", [])
+    prof.setdefault("footprints", {})
+
+    trigger_changed: list = []
+    if patch_trigger:
+        pt = _as_obj(patch_trigger)
+        if not isinstance(pt, dict):
+            return None, "patch_trigger must be an object"
+        for k, v in pt.items():
+            if v is None:
+                prof["trigger"].pop(k, None)
+                trigger_changed.append(f"{k}: removed")
+            else:
+                prof["trigger"][k] = v
+                trigger_changed.append(f"{k}: set")
+
+    removed: list = []
+    for sid in _as_list(remove_state):
+        if not sid:
+            continue
+        before = len(prof["states"])
+        prof["states"] = [s for s in prof["states"] if s.get("id") != sid]
+        prof["footprints"].pop(sid, None)
+        if len(prof["states"]) < before:
+            removed.append(sid)
+
+    added: list = []
+    for s in _as_list(add_state):
+        if not isinstance(s, dict):
+            return None, "add_state entries must be objects"
+        sid = s.get("id") or _unique_state_id(prof)
+        if any(x.get("id") == sid for x in prof["states"]):
+            return None, f"add_state: id {sid!r} already exists"
+        prof["states"].append({"id": sid, "detect": s.get("detect") or {},
+                               "text": s.get("text", ""), "controls": s.get("controls") or {}})
+        if isinstance(s.get("footprint"), dict):
+            prof["footprints"][sid] = s["footprint"]
+        added.append(sid)
+
+    patched: list = []
+    for ps in _as_list(patch_state):
+        if not isinstance(ps, dict) or not ps.get("id"):
+            return None, "patch_state entries need an 'id'"
+        sid = ps["id"]
+        target = next((x for x in prof["states"] if x.get("id") == sid), None)
+        if target is None:
+            return None, f"patch_state: no state {sid!r}"
+        for k, v in ps.items():
+            if k == "id":
+                continue
+            if isinstance(v, dict) and isinstance(target.get(k), dict):
+                target[k] = {**target[k], **v}          # deep-merge detect/controls
+            else:
+                target[k] = v
+        patched.append(sid)
+
+    if set_initial_text is not None:
+        prof["initial_text"] = str(set_initial_text)
+
+    return ({"states_added": added, "states_patched": patched, "states_removed": removed,
+             "trigger_changed": trigger_changed}, None)
+
+
+async def save_app_profile(name: str, profile: str = "", profile_json: str = "",
+                           add_state=None, patch_state=None, remove_state=None,
+                           patch_trigger=None, set_initial_text=None) -> str:
+    """Create or replace an app profile, **or** apply small deltas to an existing one.
+
+    Full replace: pass ``profile``/``profile_json`` (the whole object).
+    Delta edit (R23): pass any of ``add_state`` / ``patch_state`` / ``remove_state``
+    / ``patch_trigger`` / ``set_initial_text`` — the existing profile is loaded,
+    the ops applied, ``version`` auto-incremented, and only a per-op diff returned
+    (no need to re-emit the whole JSON). ``patch_state`` deep-merges ``detect``/
+    ``controls``.
 
     Args:
         name: profile key / app name.
-        profile: the profile object (dict) or a JSON string.
-        profile_json: JSON string alternative (when ``profile`` is not used).
+        profile: the full profile object (dict) or a JSON string (full replace).
+        profile_json: JSON string alternative for a full replace.
+        add_state: a state object (or list) to append.
+        patch_state: ``{id, …}`` (or list) — fields to merge into a state.
+        remove_state: a state id (or list) to delete (with its footprint).
+        patch_trigger: ``{process: [...]}`` etc. to merge (a ``null`` value removes a key).
+        set_initial_text: replace ``initial_text``.
     """
-    data = profile
-    if isinstance(data, str):
-        data = data or profile_json
-    if isinstance(data, str):
+    delta_requested = any(v is not None for v in
+                          (add_state, patch_state, remove_state, patch_trigger, set_initial_text))
+    data = profile or profile_json
+
+    if data and not delta_requested:
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except Exception as e:
+                return _dump({"ok": False, "error": f"invalid JSON: {e}"})
+        if not isinstance(data, dict):
+            return _dump({"ok": False, "error": "profile must be a JSON object"})
+        data.setdefault("key", learning_db.normalize_key(name))
+        path = profiles.save(name, data)
+        return _dump({"ok": True, "mode": "replace", "key": data["key"], "path": str(path),
+                      "version": data.get("version"), "problems": profiles.validate(data)})
+
+    # Delta mode
+    prof = profiles.load(name)
+    if prof is None:
+        return _dump({"ok": False, "error": f"no profile {name!r} — pass 'profile' to create it"})
+    diff, err = _merge_delta(prof, add_state=add_state, patch_state=patch_state,
+                             remove_state=remove_state, patch_trigger=patch_trigger,
+                             set_initial_text=set_initial_text)
+    if err:
+        return _dump({"ok": False, "error": err, "applied": False})
+    prof["version"] = int(prof.get("version", 1) or 1) + 1
+    if diff["states_added"] or diff["states_removed"]:
+        prof["guide_synced"] = {"ids_hash": profiles.states_hash(prof),
+                                "states": [s.get("id") for s in prof["states"]],
+                                "updated": date.today().isoformat()}
+    path = profiles.save(name, prof)
+    if diff["states_added"] or diff["states_removed"]:
         try:
-            data = json.loads(data)
-        except Exception as e:
-            return _dump({"ok": False, "error": f"invalid JSON: {e}"})
-    if not isinstance(data, dict):
-        return _dump({"ok": False, "error": "profile must be a JSON object"})
-    data.setdefault("key", learning_db.normalize_key(name))
-    path = profiles.save(name, data)
-    return _dump({"ok": True, "key": data["key"], "path": str(path),
-                  "problems": profiles.validate(data)})
+            from lib import session_analysis
+            session_analysis.sync_guide_block(name, prof)
+        except Exception:
+            pass
+    logger.info(f"save_app_profile delta: {name} {diff}")
+    return _dump({"ok": True, "mode": "delta", "key": learning_db.normalize_key(name),
+                  "path": str(path), "version": prof["version"], "diff": diff,
+                  "states": [s.get("id") for s in prof["states"]],
+                  "problems": profiles.validate(prof)})
 
 
 async def route_app_state() -> str:
@@ -450,14 +595,21 @@ TOOL_DEFINITIONS = [
     (
         "save_app_profile",
         save_app_profile,
-        "Create or replace an app profile (interaction_guides/<name>.profile.json): "
-        "trigger, states (detect rules + text + named controls) and footprints.",
+        "Create/replace an app profile (interaction_guides/<name>.profile.json) **or** "
+        "apply small deltas to an existing one without re-emitting the whole JSON: "
+        "add_state / patch_state / remove_state / patch_trigger / set_initial_text. "
+        "Delta mode auto-increments version and returns a per-op diff.",
         {
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Profile key / app name"},
-                "profile": {"type": "string", "description": "Profile object (dict) or JSON string"},
-                "profile_json": {"type": "string", "description": "JSON string alternative"},
+                "profile": {"type": "string", "description": "Full profile object (dict) or JSON string (replaces the file)"},
+                "profile_json": {"type": "string", "description": "JSON string alternative for a full replace"},
+                "add_state": {"type": "string", "description": "State object (or list) to append, e.g. {id, detect, controls, text}"},
+                "patch_state": {"type": "string", "description": "{id, …} (or list) — fields to deep-merge into a state (detect/controls merge)"},
+                "remove_state": {"type": "string", "description": "State id (or list) to delete, with its footprint"},
+                "patch_trigger": {"type": "string", "description": "Trigger fields to merge, e.g. {process:[...]}; a null value removes a key"},
+                "set_initial_text": {"type": "string", "description": "Replace initial_text"},
             },
             "required": ["name"],
         },

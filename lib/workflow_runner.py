@@ -229,10 +229,21 @@ def find_app_window(program: dict, app: str) -> Optional[int]:
     return fallback
 
 
-async def _capture(hwnd: int) -> ws.WindowState:
+_DEFAULT_MAX_TEXT = 160
+_DEFAULT_MAX_CONTROLS = 120
+_LAST_SCOPE: dict = {}
+
+
+async def _capture(hwnd: int, max_text=None, max_controls=None) -> ws.WindowState:
+    mt = int(max_text) if max_text else _DEFAULT_MAX_TEXT
+    mc = int(max_controls) if max_controls else _DEFAULT_MAX_CONTROLS
     state = await ws.capture_state(hwnd=int(hwnd), include={"uia", "text", "menu"},
-                                   max_controls=60, max_text=60)
+                                   max_controls=mc, max_text=mt)
     ws.store(state)
+    # Publish the capture scope so a step result can show the OCR blind zone (R26).
+    _LAST_SCOPE.clear()
+    _LAST_SCOPE.update({"max_text": mt, "max_controls": mc, "texts": len(state.texts),
+                        "controls": len(state.controls), "coverage": state.uia_coverage})
     return state
 
 
@@ -249,6 +260,7 @@ async def _exec(program: dict, step: dict) -> tuple[dict, bool]:
     """Execute one step. Returns ``(result, needs_llm)``."""
     app = step.get("app") or ""
     action = (step.get("action") or "").lower()
+    ocr = step.get("ocr") or {}
 
     if action == "launch":
         from builtin_tools import app_tools
@@ -288,7 +300,7 @@ async def _exec(program: dict, step: dict) -> tuple[dict, bool]:
         live = None
         resolved: dict = {}
         while True:
-            state = await _capture(hwnd)
+            state = await _capture(hwnd, max_text=ocr.get("max_text"), max_controls=ocr.get("max_controls"))
             resolved = router.route(profile, state, app) if profile else {"state_id": None}
             live = resolved.get("state_id")
             if live == expected:
@@ -301,7 +313,7 @@ async def _exec(program: dict, step: dict) -> tuple[dict, bool]:
                              "state_id": live,
                              "controls": sorted((resolved.get("controls") or {}).keys())}, hwnd), True
 
-    state = await _capture(hwnd)
+    state = await _capture(hwnd, max_text=ocr.get("max_text"), max_controls=ocr.get("max_controls"))
     routed = router.route(profile, state, app) if profile else {"state_id": None, "controls": {}}
     # Toggle guard (R13): never re-click when the app is already in the result
     # state — re-running a connect toggle from the top would disconnect it. This
@@ -468,6 +480,7 @@ async def run_step(name: str = "") -> dict:
                 "total": len(steps), "message": "workflow complete"}
 
     step = steps[idx]
+    _LAST_SCOPE.clear()
     try:
         result, needs_llm = await _exec(program, step)
     except Exception as e:
@@ -493,6 +506,7 @@ async def run_step(name: str = "") -> dict:
         "result": result,
         "needs_llm": bool(needs_llm),
         "resumable": not ok,
+        "snapshot": dict(_LAST_SCOPE) or None,
         "done": run["index"] >= len(steps),
     }
     if needs_llm:

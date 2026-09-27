@@ -27,7 +27,10 @@ Steps reference the **app** (guide key), an optional guard **state** and a named
    snapshot of the step's app window, resolves the guard state and the named
    control through that app's profile (`route` + `resolve_named`), and performs
    the action by element id (falling back to its screen centre). `wait_state`
-   polls until the expected state appears.
+   polls until the expected state appears. Each result reports the OCR scope
+   actually used under `snapshot` (`max_text`, `max_controls`, `texts`,
+   `controls`, `coverage`) — if an element sits below the captured area, add a
+   per-step override `"ocr": {"max_text": 240}` (or use a coordinate control).
 4. `workflow_status()` shows progress (index/total) and the recent log; repeat
    until `done: true`.
 
