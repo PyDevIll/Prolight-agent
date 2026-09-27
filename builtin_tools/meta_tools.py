@@ -20,6 +20,34 @@ async def ping() -> str:
     }, ensure_ascii=False)
 
 
+async def budget_status() -> str:
+    """Report the current run's step budget (iteration, remaining, tool calls).
+
+    Each run has a step budget (default 50). When ~20% remains, tool results
+    carry a ``[budget]`` note. Use ``extend_budget`` to raise it.
+    """
+    from app import get_agent
+    agent = get_agent()
+    if agent is None:
+        return json.dumps({"ok": False, "error": "no agent running"}, ensure_ascii=False)
+    status = agent.budget_status()
+    status["ok"] = True
+    return json.dumps(status, ensure_ascii=False)
+
+
+async def extend_budget(extra: int = 10) -> str:
+    """Raise the current run's step budget by ``extra`` (capped) so a task can finish.
+
+    Args:
+        extra: additional steps (1-50; default 10). Total is capped at 150.
+    """
+    from app import get_agent
+    agent = get_agent()
+    if agent is None:
+        return json.dumps({"ok": False, "error": "no agent running"}, ensure_ascii=False)
+    return json.dumps(agent.extend_budget(extra=extra), ensure_ascii=False)
+
+
 async def reload_tools() -> str:
     """Hot-reload all builtin tool modules from disk.
 
@@ -199,6 +227,21 @@ TOOL_DEFINITIONS = [
             },
         },
         "required": ["groups"],
+    }),
+    ("budget_status", budget_status, "Report this run's step budget: iteration, "
+     "max_iterations, remaining, tool_calls. A [budget] note also appears in tool "
+     "results near the limit.", {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    }),
+    ("extend_budget", extend_budget, "Raise this run's step budget by N (1-50, "
+     "default 10; total capped at 150) when a task needs more steps.", {
+        "type": "object",
+        "properties": {
+            "extra": {"type": "integer", "description": "Additional steps (1-50, default 10)"},
+        },
+        "required": [],
     }),
     ("reload_tools", reload_tools, "Hot-reload all builtin tool modules without restarting", {
         "type": "object",

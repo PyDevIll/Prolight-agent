@@ -233,11 +233,20 @@ async def save_app_profile(name: str, profile: str = "", profile_json: str = "",
                   "problems": profiles.validate(prof)})
 
 
+def _ocr_scope(state, limit: int = 40) -> list:
+    """The OCR lines the router actually saw (text + screen rect), capped (R29/#9)."""
+    out = []
+    for t in (state.texts or [])[:limit]:
+        out.append({"text": (t.name or "").strip()[:80], "rect": list(t.rect or [])})
+    return out
+
+
 async def route_app_state() -> str:
     """Run the deterministic router on the latest ``win_snapshot``.
 
-    Returns the matched app/state, resolved named controls (with live ids) and
-    the fragment the agent would inject. Call ``win_snapshot`` first.
+    Returns the matched app/state, resolved named controls (with live ids), the
+    fragment the agent would inject, and (for debugging ``detect``) the OCR
+    lines it saw under ``ocr_scope``. Call ``win_snapshot`` first.
     """
     from lib import window_state
     state = window_state.get()
@@ -247,13 +256,15 @@ async def route_app_state() -> str:
     found = profiles.find_profile(
         hwnd=state.hwnd, title=win.get("title", ""), process=win.get("process", ""),
         url=state.active_url())
+    scope = _ocr_scope(state)
     if not found:
-        return _dump({"ok": True, "matched": False,
+        return _dump({"ok": True, "matched": False, "ocr_scope": scope,
                       "hint": "no profile for this window (load_app_profile / save_app_profile)"})
     key, prof = found
     result = router.route(prof, state, key)
     return _dump({"ok": True, "matched": bool(result.get("state_id")),
-                  "route": result, "volatile": router.volatile_text(result, prof)})
+                  "route": result, "ocr_scope": scope,
+                  "volatile": router.volatile_text(result, prof)})
 
 
 async def resolve_app_control(name: str) -> str:

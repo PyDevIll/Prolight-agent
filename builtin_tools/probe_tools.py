@@ -173,6 +173,114 @@ async def screen_probe(
     return _dump(result)
 
 
+async def screen_tooltip(
+    x: int,
+    y: int,
+    wait: float = 1.2,
+    radius: int = 340,
+    scan: int = 8,
+    max_scan: int = 2,
+    lang: str = "auto",
+    save: bool = False,
+) -> str:
+    """Hover a point and read its tooltip via OCR (no vision call).
+
+    The cheapest deterministic source of truth for an icon/button that has no
+    accessible name: move the cursor to ``(x, y)``, wait for the tooltip, OCR the
+    area around the cursor and return the text line nearest the cursor with its
+    screen rect. Re-tries at ``x±scan`` (up to ``max_scan`` times) when nothing is
+    found. Restores the original cursor position.
+
+    Args:
+        x, y: screen point to hover.
+        wait: seconds to wait for the tooltip to appear (default 1.2).
+        radius: size of the OCR box to the lower-right of the cursor (default 340).
+        scan: horizontal step for the not-found retry (default 8 px).
+        max_scan: number of retry steps left/right (default 2 each).
+        lang: OCR language, or "auto" for all installed.
+        save: save the captured image to data/vision/.
+    """
+    from lib import ocr
+
+    x, y = int(x), int(y)
+    origin = winapi.get_cursor_pos() or {}
+    ox, oy = origin.get("x"), origin.get("y")
+    size = winapi.get_screen_size()
+
+    def _region(cx: int) -> list:
+        left = max(0, cx - 40)
+        top = max(0, y - 8)
+        right = min(int(size.get("width") or 10_000), left + int(radius))
+        bottom = min(int(size.get("height") or 10_000), top + int(radius))
+        return [left, top, right, bottom]
+
+    attempts = [x]
+    for i in range(1, int(max_scan) + 1):
+        attempts += [x - int(scan) * i, x + int(scan) * i]
+
+    best_lines: list = []
+    scanned_at = None
+    result_lang = None
+    try:
+        for cx in attempts:
+            try:
+                ib.move_to(int(cx), y, duration=0.15)
+            except Exception:
+                winapi.set_cursor_pos(int(cx), y)
+            await asyncio.sleep(max(0.15, float(wait)))
+            rect = _region(int(cx))
+            if rect[2] - rect[0] < 8 or rect[3] - rect[1] < 8:
+                continue
+            img = image_ops.grab_screen(rect)
+            if img is None:
+                continue
+            try:
+                res = await ocr.recognize_auto(img, None if lang == "auto" else [lang])
+            except Exception as e:
+                logger.debug(f"screen_tooltip OCR failed: {e}")
+                continue
+            result_lang = res.get("lang")
+            lines = []
+            for ln in res.get("lines", []):
+                b = ln.get("bbox")
+                text = (ln.get("text") or "").strip()
+                if not b or not text:
+                    continue
+                box = [rect[0] + b[0], rect[1] + b[1], rect[0] + b[2], rect[1] + b[3]]
+                dx = max(0, max(box[0] - cx, cx - box[2]))
+                dy = max(0, max(box[1] - y, y - box[3]))
+                lines.append({"text": text, "rect": box, "dist": int((dx * dx + dy * dy) ** 0.5)})
+            lines.sort(key=lambda l: l["dist"])
+            if save:
+                image_ops.save(img, "tooltip")
+            if lines:
+                if not best_lines or lines[0]["dist"] < best_lines[0]["dist"]:
+                    best_lines = lines
+                    scanned_at = {"x": int(cx), "y": y}
+                if lines[0]["dist"] <= 80:
+                    break
+            else:
+                break
+    finally:
+        if ox is not None and oy is not None:
+            try:
+                winapi.set_cursor_pos(int(ox), int(oy))
+            except Exception:
+                pass
+
+    found = bool(best_lines) and best_lines[0]["dist"] <= 80
+    logger.info(f"screen_tooltip ({x},{y}): found={found} "
+                f"text={(best_lines[0]['text'] if found else '')!r}")
+    return _dump({
+        "ok": True, "found": found,
+        "text": best_lines[0]["text"] if found else "",
+        "rect": best_lines[0]["rect"] if found else None,
+        "lines": best_lines[:8],
+        "scanned_at": scanned_at, "lang": result_lang,
+        "hint": None if found else "no tooltip text found near the point — the control may have no tooltip",
+    })
+
+
 TOOL_DEFINITIONS = [
     (
         "screen_probe",
@@ -199,6 +307,28 @@ TOOL_DEFINITIONS = [
                 "ask_vision": {"type": "boolean", "description": "Also ask the vision model about the AFTER image"},
                 "query": {"type": "string", "description": "Vision question (with ask_vision)"},
                 "save": {"type": "boolean", "description": "Save BEFORE/AFTER images (default false)"},
+            },
+            "required": ["x", "y"],
+        },
+    ),
+    (
+        "screen_tooltip",
+        screen_tooltip,
+        "Hover a point and read its tooltip via OCR (no vision call). The cheapest "
+        "deterministic way to identify an icon/button that has no accessible name: "
+        "returns {found, text, rect} for the line nearest the cursor, retrying at "
+        "x±8 px when nothing is found, and restores the cursor.",
+        {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "description": "Screen X to hover"},
+                "y": {"type": "integer", "description": "Screen Y to hover"},
+                "wait": {"type": "number", "description": "Seconds to wait for the tooltip (default 1.2)"},
+                "radius": {"type": "integer", "description": "OCR box size lower-right of the cursor (default 340)"},
+                "scan": {"type": "integer", "description": "Retry step in px (default 8)"},
+                "max_scan": {"type": "integer", "description": "Retry steps left/right (default 2)"},
+                "lang": {"type": "string", "description": "OCR language or 'auto' (default auto)"},
+                "save": {"type": "boolean", "description": "Save the captured image (default false)"},
             },
             "required": ["x", "y"],
         },

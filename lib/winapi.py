@@ -425,31 +425,59 @@ def get_window_info(hwnd: int) -> dict:
     }
 
 
-def list_windows(visible_only: bool = True, titled_only: bool = True) -> list[dict]:
+def list_windows(visible_only: bool = True, titled_only: bool = True,
+                 include_popups: bool = False, include_cloaked: bool = False) -> list[dict]:
     """Enumerate top-level windows, newest/top-most first is not guaranteed.
 
     Args:
         visible_only: skip invisible windows.
         titled_only: skip windows with an empty title.
+        include_popups: include owned / tool / no-activate popups (menus, tooltips,
+            dropdowns) that have no title — and report owner/``ex_style`` flags, so
+            an open menu is discoverable. Implies ``visible_only=False`` /
+            ``titled_only=False``.
+        include_cloaked: also include DWM-cloaked (ghost) windows.
     """
+    if include_popups:
+        visible_only = False
+        titled_only = False
     results: list[dict] = []
+
+    GW_OWNER = 4
+    GWL_EXSTYLE = -20
+    WS_EX_TOOLWINDOW = 0x00000080
+    WS_EX_TOPMOST = 0x00000008
+    WS_EX_NOACTIVATE = 0x08000000
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     def _cb(hwnd, _lparam):
         if visible_only and not user32.IsWindowVisible(hwnd):
             return True
-        if is_cloaked(hwnd):
+        if not include_cloaked and is_cloaked(hwnd):
             return True
         title = get_window_text(hwnd)
         if titled_only and not title:
             return True
         info = get_window_info(hwnd)
         info["title"] = title
+        if include_popups:
+            owner = user32.GetWindow(hwnd, GW_OWNER)
+            ex = int(user32.GetWindowLongW(hwnd, GWL_EXSTYLE))
+            info["owner"] = int(owner or 0)
+            info["tool_window"] = bool(ex & WS_EX_TOOLWINDOW)
+            info["no_activate"] = bool(ex & WS_EX_NOACTIVATE)
+            info["topmost"] = bool(ex & WS_EX_TOPMOST)
         results.append(info)
         return True
 
     user32.EnumWindows(_cb, 0)
     return results
+
+
+def get_screen_size() -> dict:
+    """Primary screen size in physical pixels (SM_CXSCREEN/SM_CYSCREEN)."""
+    return {"width": int(user32.GetSystemMetrics(0)),
+            "height": int(user32.GetSystemMetrics(1))}
 
 
 def find_child_by_class(hwnd: int, class_substring: str) -> Optional[int]:

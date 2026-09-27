@@ -93,6 +93,7 @@ async def win_list_hwnd(
     visible_only: bool = True,
     titled_only: bool = True,
     process_filter: str = "",
+    include_popups: bool = False,
 ) -> str:
     """List top-level windows and their HWNDs.
 
@@ -101,8 +102,13 @@ async def win_list_hwnd(
         titled_only: only windows with a non-empty title.
         process_filter: case-insensitive substring of the process name
             (e.g. "notepad") to filter by.
+        include_popups: also include owned/tool/no-activate popups with no title
+            (menus, dropdowns, tooltips) and report `owner`/`tool_window`/
+            `no_activate`/`topmost`. Use this to find an open menu window.
     """
-    windows = winapi.list_windows(visible_only=visible_only, titled_only=titled_only)
+    windows = winapi.list_windows(
+        visible_only=visible_only, titled_only=titled_only,
+        include_popups=include_popups, include_cloaked=include_popups)
 
     if process_filter:
         needle = process_filter.lower()
@@ -111,7 +117,7 @@ async def win_list_hwnd(
     compact = []
     for w in windows:
         rect = w.get("rect") or {}
-        compact.append({
+        item = {
             "hwnd": w["hwnd"],
             "title": w["title"],
             "process": w["process"],
@@ -125,9 +131,18 @@ async def win_list_hwnd(
                 "width": rect.get("width"),
                 "height": rect.get("height"),
             } if rect else None,
-        })
+        }
+        if include_popups:
+            item.update({
+                "visible": w.get("visible"),
+                "owner": w.get("owner"),
+                "tool_window": w.get("tool_window"),
+                "no_activate": w.get("no_activate"),
+                "topmost": w.get("topmost"),
+            })
+        compact.append(item)
 
-    logger.debug(f"win_list_hwnd: {len(compact)} windows (filter={process_filter!r})")
+    logger.debug(f"win_list_hwnd: {len(compact)} windows (filter={process_filter!r}, popups={include_popups})")
     return _dump({"count": len(compact), "windows": compact})
 
 
@@ -172,6 +187,13 @@ async def win_snapshot(
     """
     inc = set(include) if include else set(_INCLUDE)
     inc &= _INCLUDE
+    if hwnd is not None and (region is not None or monitor is not None):
+        return _dump({
+            "ok": False,
+            "error": "give either hwnd (window mode) or region/monitor (screen mode), "
+                     "not both — with hwnd the region is ignored. To snapshot a screen "
+                     "area omit hwnd.",
+        })
     try:
         state = await ws.capture_state(
             hwnd=int(hwnd) if hwnd is not None else None,
@@ -473,13 +495,16 @@ TOOL_DEFINITIONS = [
         "win_list_hwnd",
         win_list_hwnd,
         "List top-level windows of running apps with their HWND, title, process, "
-        "pid, class and rectangle. Use this first to find the window you need.",
+        "pid, class and rectangle. Use this first to find the window you need. "
+        "include_popups=true also lists owned/menu/dropdown popups with no title "
+        "(with owner/ex-style flags) — use it when a menu is open.",
         {
             "type": "object",
             "properties": {
                 "visible_only": {"type": "boolean", "description": "Only visible windows (default true)"},
                 "titled_only": {"type": "boolean", "description": "Only windows with a title (default true)"},
                 "process_filter": {"type": "string", "description": "Case-insensitive substring of process name, e.g. 'notepad'"},
+                "include_popups": {"type": "boolean", "description": "Also list untitled owned/tool/no-activate popups, e.g. an open menu (default false)"},
             },
             "required": [],
         },

@@ -82,6 +82,9 @@ in your context — act on them directly.
   `run_workflow_step` result reports it under `snapshot` so you can spot the blind
   zone. Bottom-of-window elements may fall outside it — raise the caps or use a
   coordinate control.
+- When debugging a non-matching `detect`, `route_app_state` returns `ocr_scope`
+  (the OCR lines it actually saw, with rects) alongside `rejections`, so you can
+  fix the needles without guessing.
 
 ### Workflows — `workflows/<task>.md` (CROSS-APP)
 A repeatable procedure that **switches between several apps** to reach a goal

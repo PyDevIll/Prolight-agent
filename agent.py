@@ -97,6 +97,9 @@ class Agent:
         self._active_groups = None     # tool groups exposed this run (None = all)
         self._unlocked_groups = set()  # groups unlocked by enable_tools this run
         self._last_volatile = None     # last injected route fragment
+        self._iteration = 0            # current step (for budget_status)
+        self._max_iterations = 50      # per-run step budget (extendable)
+        self._tool_calls = 0           # tool calls made this run
 
         # Tell the context manager how large the static prompt is, so its
         # overflow/compression decision measures the real assembled context.
@@ -143,6 +146,34 @@ class Agent:
                 self._unlocked_groups.add(g)
                 self._active_groups.add(g)
         return sorted(self._active_groups)
+
+    # ── run budget (iteration visibility, #8) ─────────────────────────────
+    def budget_status(self) -> dict:
+        """Steps used/remaining this run, so the agent can plan ahead."""
+        total = max(1, int(self._max_iterations))
+        used = int(self._iteration)
+        ratio = round(used / total, 2)
+        return {
+            "iteration": used, "max_iterations": int(self._max_iterations),
+            "remaining": max(0, int(self._max_iterations) - used),
+            "used_ratio": ratio, "tool_calls": int(self._tool_calls),
+            "warn": ratio >= 0.8,
+            "hint": ("wind the task down, or call extend_budget(extra=N) for more steps"
+                     if ratio >= 0.8 else "budget is healthy"),
+        }
+
+    def extend_budget(self, extra: int = 10, hard_cap: int = 150) -> dict:
+        """Raise this run's step budget (capped) so a task can finish."""
+        try:
+            extra = int(extra)
+        except Exception:
+            extra = 10
+        extra = max(1, min(extra, 50))
+        before = int(self._max_iterations)
+        self._max_iterations = min(int(hard_cap), before + extra)
+        logger.info(f"extend_budget: {before} -> {self._max_iterations} (extra={extra})")
+        return {"ok": True, "before": before, "max_iterations": self._max_iterations,
+                "hard_cap": int(hard_cap)}
 
     def _maybe_route(self) -> None:
         """Deterministically route the current window state against its profile.
@@ -475,6 +506,9 @@ class Agent:
         reasoning_callback: async callable(thought_text) for live reasoning output.
         """
         max_iterations = 50
+        self._max_iterations = max_iterations
+        self._iteration = 0
+        self._tool_calls = 0
         iteration = 0
         enable_reasoning = bool(reasoning_callback)
 
@@ -494,8 +528,9 @@ class Agent:
                 "content": initial_user_request,
             }, save=True)
 
-        while iteration < max_iterations:
+        while iteration < self._max_iterations:
             iteration += 1
+            self._iteration = iteration
 
             # Check for new tools (hot-reload) – always use live registry
             registry = get_registry()
@@ -544,6 +579,17 @@ class Agent:
                 tool_results = await self._execute_tools_parallel(
                     tool_call_objects, initial_user_request
                 )
+                self._tool_calls += len(tool_results)
+
+                # Near the budget limit, tell the model so it can wind down or
+                # extend (the note is part of the tool result it reads next).
+                remaining = self._max_iterations - iteration
+                if remaining <= max(3, int(0.2 * self._max_iterations)):
+                    note = (f"\n\n[budget] step {iteration}/{self._max_iterations} — "
+                            f"{remaining} step(s) left. Finish what you can, or call "
+                            f"extend_budget(extra=N) if more steps are needed.")
+                    for r in tool_results:
+                        r["content"] = (r.get("content") or "") + note
 
                 for result in tool_results:
                     self.messages.append(result, save=True)
@@ -560,7 +606,7 @@ class Agent:
                 self._maybe_compress_after_run()
                 return content
 
-        logger.warning(f"Max iterations ({max_iterations}) reached")
+        logger.warning(f"Max iterations ({self._max_iterations}) reached")
         self._maybe_compress_after_run()
         return "Max iterations reached without final response."
 
