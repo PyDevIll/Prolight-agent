@@ -66,6 +66,26 @@ def _locate_prompt(query: str, width: int, height: int) -> str:
     )
 
 
+def _grid_overlay(img):
+    """Draw a fraction grid (0.1..0.9, labelled) so the model reads positions.
+
+    The labels are FRACTIONS, matching the requested box format — pixel labels
+    would tempt the model to return pixels, which it is unreliable at.
+    """
+    from PIL import ImageDraw
+
+    im = img.convert("RGB").copy()
+    draw = ImageDraw.Draw(im)
+    w, h = im.size
+    for i in range(1, 10):
+        x, y = int(round(w * i / 10.0)), int(round(h * i / 10.0))
+        draw.line([(x, 0), (x, h)], fill=(255, 0, 0), width=1)
+        draw.line([(0, y), (w, y)], fill=(255, 0, 0), width=1)
+        draw.text((min(x + 2, w - 24), 2), f"{i / 10:.1f}", fill=(255, 0, 0))
+        draw.text((2, min(y + 2, h - 12)), f"{i / 10:.1f}", fill=(255, 0, 0))
+    return im
+
+
 def _extract_json(text: Optional[str]):
     """Best-effort JSON object extraction from a model answer."""
     if not text:
@@ -269,14 +289,17 @@ class VisionAgent:
         max_dim: int = 1600,
         snap: bool = True,
         max_tokens: int = 1024,
+        grid: bool = True,
     ) -> dict:
         """Return APPROXIMATE element boxes, then snap them to exact pixels.
 
         The model is asked for boxes as *fractions* of the crop (which it does
         reliably); code converts them to pixels and refines each with
-        ``image_ops.snap_box``. Boxes are hints — exact geometry still comes
-        from UIA/OCR/colour search. Returns ``elements`` with ``box_frac``,
-        ``image_bbox``, ``snapped_bbox`` and ``screen_*`` coordinates.
+        ``image_ops.snap_box``. With ``grid`` a fraction grid is drawn on the
+        image sent to the model. Boxes are **draft hints — not for clicking**:
+        confirm exact geometry via UIA/OCR/colour or ``screen_tooltip``. Returns
+        ``elements`` with ``box_frac``, ``image_bbox``, ``snapped_bbox`` and
+        ``screen_*`` coordinates, plus ``geometry_confidence``/``not_for_clicking``.
         """
         region = await self._resolve_region(rect=rect, hwnd=hwnd, control=control)
         if not region:
@@ -291,7 +314,8 @@ class VisionAgent:
             return {"ok": False, "error": f"capture failed: {e}"}
 
         path = image_ops.save(img, label or "locate")
-        data_url, w, h = encode_image(img, max_dim=max_dim)
+        send_img = _grid_overlay(img) if grid else img
+        data_url, w, h = encode_image(send_img, max_dim=max_dim)
         parts = [
             {"type": "text", "text": _locate_prompt(query, w, h)},
             {"type": "image_url", "image_url": {"url": data_url}},
@@ -337,6 +361,7 @@ class VisionAgent:
                 "screen_center": [(sx0 + sx1) // 2, (sy0 + sy1) // 2],
                 "confidence": el.get("confidence") if isinstance(el, dict) else None,
                 "snapped": snapped != approx,
+                "geometry": "draft",
             })
 
         logger.info(f"vision locate[{label or '-'}] {w}x{h}: {len(elements)} element(s)")
@@ -344,6 +369,9 @@ class VisionAgent:
             "ok": True, "label": label, "source": src, "path": str(path),
             "image_size": {"width": w, "height": h},
             "screen_rect": meta["screen_rect"],
+            "geometry_confidence": "draft", "not_for_clicking": True, "grid": bool(grid),
+            "hint": ("boxes are approximate — confirm exact geometry via UIA/OCR/colour "
+                     "or screen_tooltip before clicking"),
             "elements": elements, "answer": answer,
         }
 

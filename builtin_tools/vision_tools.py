@@ -129,8 +129,10 @@ TOOL_DEFINITIONS = [
         "Look at a small region/control (or an image file) and describe it with "
         "the vision model. Prefer a tight `rect` or a control (hwnd + "
         "control_type/name); use `scale` to zoom a tiny control. With a `label` "
-        "it is watched for vision_compare. Set structured=true to get approximate "
-        "element boxes (fractions of the crop, snapped to pixels).",
+        "it is watched for vision_compare. Set structured=true for element boxes "
+        "(fractions, snapped to pixels, on a fraction grid) — these are DRAFT "
+        "hints, NOT for clicking; confirm geometry with UIA/OCR/colour or "
+        "screen_tooltip first.",
         {
             "type": "object",
             "properties": {

@@ -295,6 +295,79 @@ def find_color_regions(
     return results[:max_regions]
 
 
+def find_ink_regions(
+    img: Image.Image,
+    dark: bool = True,
+    threshold: Optional[int] = None,
+    close: int = 6,
+    min_area: int = 8,
+    max_regions: int = 64,
+    region: Optional[RectLike] = None,
+) -> list[dict]:
+    """Locate thin "ink" glyphs and cluster them into button-sized boxes.
+
+    Unlike :func:`find_color_regions` (one flat colour), this thresholds
+    luminance and **dilates** the mask so the strokes of a single icon/button
+    merge into one bbox — the right primitive for thin monochrome icons that a
+    colour-blob search fragments. When ``threshold`` is None it is derived from
+    the image (mean − ½·σ for dark ink). Returns blobs sorted by area (largest
+    first) with ``bbox``/``center``/``width``/``height``/``area``.
+    """
+    work = img.convert("L")
+    ox = oy = 0
+    if region is not None:
+        l, t, r, b = normalize_rect(region)
+        l, t = max(0, l), max(0, t)
+        r, b = min(work.width, r), min(work.height, b)
+        if r <= l or b <= t:
+            return []
+        ox, oy = l, t
+        work = work.crop((l, t, r, b))
+
+    arr = np.asarray(work, dtype=np.int16)
+    auto = threshold is None
+    if auto:
+        mu, sd = float(arr.mean()), float(arr.std())
+        if sd < 1.0:            # uniform image: no distinct ink
+            return []
+        threshold = mu - 0.5 * sd if dark else mu + 0.5 * sd
+    threshold = max(0, min(255, int(threshold)))
+    mask = (arr <= threshold) if dark else (arr >= threshold)
+    if not mask.any():
+        return []
+
+    merged = ndimage.binary_dilation(mask, iterations=max(0, int(close)))
+    labels, n = ndimage.label(merged)
+    if n == 0:
+        return []
+
+    objects = ndimage.find_objects(labels)
+    results: list[dict] = []
+    for label in range(1, n + 1):
+        sl = objects[label - 1]
+        if sl is None:
+            continue
+        ink = mask[sl]
+        a = int(ink.sum())
+        if a < min_area:
+            continue
+        ys, xs = np.nonzero(ink)
+        miny, minx = int(sl[0].start), int(sl[1].start)
+        maxy, maxx = int(sl[0].stop) - 1, int(sl[1].stop) - 1
+        cx = int(round(float(xs.mean()))) + minx + ox
+        cy = int(round(float(ys.mean()))) + miny + oy
+        results.append({
+            "bbox": [minx + ox, miny + oy, maxx + ox, maxy + oy],
+            "center": [cx, cy],
+            "width": maxx - minx + 1,
+            "height": maxy - miny + 1,
+            "area": a,
+            "threshold": int(threshold),
+        })
+    results.sort(key=lambda d: d["area"], reverse=True)
+    return results[:max_regions]
+
+
 def find_template(
     img: Image.Image,
     template,

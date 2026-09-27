@@ -101,25 +101,32 @@ async def screen_find(
     exact: bool = False,
     case_sensitive: bool = False,
     lang: str = "auto",
+    dark: bool = True,
+    ink_threshold: int = -1,
+    close: int = 6,
     save: bool = False,
 ) -> str:
     """Deterministically locate elements and return SCREEN coordinates.
 
     Args:
-        kind: "color" (colour blobs), "template" (match an image), or "text" (OCR).
+        kind: "color" (colour blobs), "template" (match an image), "text" (OCR),
+            or "ink" (thin monochrome glyphs clustered into button boxes).
         color: [r,g,b] or "#RRGGBB" (kind=color).
         template_path: small PNG/JPG to find (kind=template).
         text: label/text to find (kind=text).
         hwnd: window to search (native pixels; works while occluded).
         rect: [left,top,right,bottom] screen region (if no hwnd).
         tolerance: per-channel colour tolerance 0-255 (kind=color).
-        min_area: ignore colour blobs smaller than this (kind=color).
-        max_regions: cap on colour blobs, largest first (kind=color).
+        min_area: ignore colour/ink blobs smaller than this (kind=color/ink).
+        max_regions: cap on blobs, largest first (kind=color/ink).
         threshold: max mean pixel diff to accept (kind=template).
         max_results: cap on returned matches.
         exact: text must match exactly (kind=text).
         case_sensitive: case-sensitive text match (kind=text).
         lang: OCR language, or "auto" for all installed (kind=text).
+        dark: ink is darker than the background (kind=ink, default true).
+        ink_threshold: luminance cutoff 0-255, or -1 for auto (kind=ink).
+        close: dilation px that merges an icon's strokes into one box (kind=ink).
         save: save the captured image to data/vision/.
     """
     kind = (kind or "").lower().strip()
@@ -140,6 +147,18 @@ async def screen_find(
                 "screen_bbox": _box_to_screen(screen_rect, img, r["bbox"]),
                 "image_bbox": r["bbox"], "width": r["width"], "height": r["height"], "area": r["area"],
             } for r in regions]
+        elif kind == "ink":
+            regions = image_ops.find_ink_regions(
+                img, dark=bool(dark), threshold=(None if int(ink_threshold) < 0 else int(ink_threshold)),
+                close=int(close), min_area=min_area, max_regions=max_regions,
+            )
+            matches = [{
+                "screen_center": {"x": _to_screen(screen_rect, img, r["center"][0], r["center"][1])[0],
+                                  "y": _to_screen(screen_rect, img, r["center"][0], r["center"][1])[1]},
+                "screen_bbox": _box_to_screen(screen_rect, img, r["bbox"]),
+                "image_bbox": r["bbox"], "width": r["width"], "height": r["height"],
+                "area": r["area"], "threshold": r.get("threshold"),
+            } for r in regions]
         elif kind == "template":
             if not template_path:
                 return _dump({"ok": False, "error": "kind='template' needs `template_path`"})
@@ -158,7 +177,7 @@ async def screen_find(
                 text, screen_rect, img, exact, case_sensitive, lang, max_results
             )
         else:
-            return _dump({"ok": False, "error": f"unknown kind {kind!r} (use color/template/text)"})
+            return _dump({"ok": False, "error": f"unknown kind {kind!r} (use color/ink/template/text)"})
     except Exception as e:
         logger.error(f"screen_find({kind}) failed: {e}")
         return _dump({"ok": False, "error": str(e)})
@@ -184,26 +203,30 @@ TOOL_DEFINITIONS = [
         "screen_find",
         screen_find,
         "Deterministically locate elements and return SCREEN coordinates (no "
-        "vision model): kind='color' (blobs of a colour), 'template' (match a "
-        "small image) or 'text' (OCR). Use when win_snapshot has no useful UIA "
-        "or OCR, or for a pixel-precise target. Click the returned screen_center.",
+        "vision model): kind='color' (blobs of a colour), 'ink' (thin monochrome "
+        "glyphs clustered into button boxes — use for line-art icons), 'template' "
+        "(match a small image) or 'text' (OCR). Use when win_snapshot has no useful "
+        "UIA or OCR, or for a pixel-precise target. Click the returned screen_center.",
         {
             "type": "object",
             "properties": {
-                "kind": {"type": "string", "description": "color | template | text"},
+                "kind": {"type": "string", "description": "color | ink | template | text"},
                 "color": {"type": "array", "items": {"type": "integer"}, "description": "[r,g,b] for kind=color"},
                 "template_path": {"type": "string", "description": "Small image to find (kind=template)"},
                 "text": {"type": "string", "description": "Label/text to find (kind=text)"},
                 "hwnd": {"type": "integer", "description": "Window to search (native pixels)"},
                 "rect": {"type": "array", "items": {"type": "integer"}, "description": "[left,top,right,bottom] screen region"},
                 "tolerance": {"type": "integer", "description": "Colour tolerance 0-255 (kind=color, default 16)"},
-                "min_area": {"type": "integer", "description": "Min blob area (kind=color, default 4)"},
-                "max_regions": {"type": "integer", "description": "Max colour blobs (default 32)"},
+                "min_area": {"type": "integer", "description": "Min blob ink area (kind=color/ink, default 4/8)"},
+                "max_regions": {"type": "integer", "description": "Max blobs (kind=color/ink, default 32)"},
                 "threshold": {"type": "number", "description": "Max mean pixel diff (kind=template, default 30)"},
                 "max_results": {"type": "integer", "description": "Max matches (default 8)"},
                 "exact": {"type": "boolean", "description": "Exact text match (kind=text)"},
                 "case_sensitive": {"type": "boolean", "description": "Case-sensitive text match (kind=text)"},
                 "lang": {"type": "string", "description": "OCR language or 'auto' (kind=text, default auto)"},
+                "dark": {"type": "boolean", "description": "Ink is darker than the background (kind=ink, default true)"},
+                "ink_threshold": {"type": "integer", "description": "Luminance cutoff 0-255 or -1 for auto (kind=ink)"},
+                "close": {"type": "integer", "description": "Dilation px merging an icon's strokes into one box (kind=ink, default 6)"},
                 "save": {"type": "boolean", "description": "Save the captured image (default false)"},
             },
             "required": ["kind"],
