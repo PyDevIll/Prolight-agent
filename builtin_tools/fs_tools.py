@@ -5,6 +5,7 @@ import stat
 import fnmatch
 import shutil
 import re
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -57,6 +58,17 @@ def _is_binary(filepath: str, sample_size: int = 1024) -> bool:
     printable = set(range(0x20, 0x7f)) | {0x09, 0x0a, 0x0d}
     non_printable = sum(1 for b in data if b not in printable)
     return (non_printable / len(data)) > 0.30
+
+
+_GREP_META = re.compile(r"[|()\[\]{}^$*+?\\]")
+
+
+def _grep_meta_note(pattern: str, regex: bool) -> str:
+    """Warn when an alternation/metachar pattern is searched literally."""
+    if not regex and pattern and _GREP_META.search(pattern):
+        return ("\n[note: pattern contains regex metacharacters but regex=false — "
+                "searched literally; pass regex=true to use them]")
+    return ""
 
 
 async def fs_tree(path: str = ".", depth: int = 2, ascii_mode: bool = False) -> str:
@@ -245,25 +257,27 @@ async def fs_grep(
                 break
 
     # Process each file (non‑blocking with thread pool)
-    def search_file(fp: Path) -> list[str]:
+    def search_file(fp: Path) -> tuple:
         local_matches: list[str] = []
+        bytes_read = 0
         try:
             fsize = fp.stat().st_size
         except OSError:
-            return local_matches
+            return local_matches, bytes_read
 
         # Size check
         if max_size and fsize > max_size:
-            return local_matches  # counted by caller
+            return local_matches, bytes_read  # counted by caller
 
         # Binary detection (unless forced)
         if not force_text and _is_binary(str(fp)):
-            return local_matches  # counted by caller
+            return local_matches, bytes_read  # counted by caller
 
         # Stream line by line to avoid memory blow
         try:
             with open(fp, 'r', encoding='utf-8', errors='replace' if force_text else 'strict') as f:
                 for lineno, line in enumerate(f, 1):
+                    bytes_read += len(line)
                     line = line.rstrip('\n')
                     if regex:
                         if pat.search(line):
@@ -278,9 +292,10 @@ async def fs_grep(
         except (UnicodeDecodeError, PermissionError, OSError):
             # If we can't read, treat as binary / inaccessible
             pass
-        return local_matches
+        return local_matches, bytes_read
 
     loop = asyncio.get_running_loop()
+    scanned_bytes = 0
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = []
         for fp in files_to_search:
@@ -288,8 +303,9 @@ async def fs_grep(
 
         for future in asyncio.as_completed(futures):
             try:
-                result = await future
+                result, nb = await future
                 matches.extend(result)
+                scanned_bytes += nb
             except Exception:
                 pass
 
@@ -326,15 +342,17 @@ async def fs_grep(
         if len(skipped_binary) + len(skipped_large) > 5:
             skipped_msg += "\nTip: use force_text=True or max_size=0, or grep specific files with path= to avoid skips"
 
+    meta = (f"\n[engine={'regex' if regex else 'literal'}; scanned_bytes={scanned_bytes}]"
+            + _grep_meta_note(pattern, regex))
     if not matches:
-        return f"No matches for '{pattern}' in {path}{skipped_msg}"
+        return f"No matches for '{pattern}' in {path}{skipped_msg}{meta}"
 
     out = "\n".join(matches[:MAX_MATCHES])
     if len(matches) > MAX_MATCHES:
         out += f"\n\n... truncated to {MAX_MATCHES} matches"
     if skipped_msg:
         out += f"\n{skipped_msg}"
-    return out
+    return out + meta
 
 
 async def _grep_single_file(
@@ -368,10 +386,12 @@ async def _grep_single_file(
         return f"Invalid regex: {e}"
 
     matches = []
+    scanned = 0
     MAX_MATCHES = 100
     try:
         with open(fp, 'r', encoding='utf-8', errors='replace' if force_text else 'strict') as f:
             for lineno, line in enumerate(f, 1):
+                scanned += len(line)
                 line = line.rstrip('\n')
                 if regex:
                     if pat.search(line):
@@ -388,12 +408,80 @@ async def _grep_single_file(
     except Exception as e:
         return f"Error reading {fp}: {e}"
 
+    meta = (f"\n[engine={'regex' if regex else 'literal'}; scanned_bytes={scanned}]"
+            + _grep_meta_note(pattern, regex))
     if not matches:
-        return f"No matches for '{pattern}' in {fp}"
+        return f"No matches for '{pattern}' in {fp}{meta}"
     out = "\n".join(matches)
     if len(matches) >= MAX_MATCHES:
         out += f"\n\n... truncated to {MAX_MATCHES} matches"
-    return out
+    return out + meta
+
+
+def _walk_path(doc, expr: str):
+    cur = doc
+    for part in expr.split("."):
+        part = part.strip()
+        if not part:
+            continue
+        if isinstance(cur, list):
+            if part.isdigit():
+                cur = cur[int(part)]
+            else:
+                cur = [x.get(part) for x in cur if isinstance(x, dict) and part in x]
+        elif isinstance(cur, dict):
+            cur = cur.get(part)
+        else:
+            return None
+    return cur
+
+
+async def fs_json_query(path: str, expr: str = "", max_chars: int = 8000) -> str:
+    """Query a JSON/JSONL file with a light dotted expression.
+
+    Examples: ``""`` (whole doc), ``states``, ``states.0.detect``,
+    ``states | id=main`` (filter a list by ``key=value``), ``footprints.main.keys``.
+
+    Args:
+        path: JSON/JSONL file.
+        expr: dotted path with an optional ``| key=value`` filter.
+        max_chars: cap on returned characters (default 8000).
+    """
+    p = _safe_path(path)
+    if not p.exists():
+        return f"File not found: {path}"
+    if _is_binary(str(p)):
+        return f"Binary file detected: {path}"
+    text = p.read_text(encoding="utf-8", errors="replace")
+    docs = []
+    try:
+        docs = [json.loads(text)]
+    except Exception:
+        for ln in text.splitlines():
+            ln = ln.strip()
+            if ln:
+                try:
+                    docs.append(json.loads(ln))
+                except Exception:
+                    pass
+    if not docs:
+        return f"No JSON parsed in {path}"
+    base_expr, _, flt = (expr or "").partition("|")
+    base_expr, filt = base_expr.strip(), flt.strip()
+    results = []
+    for doc in docs:
+        val = _walk_path(doc, base_expr) if base_expr else doc
+        if filt and isinstance(val, list) and "=" in filt:
+            k, _, v = filt.partition("=")
+            k, v = k.strip(), v.strip()
+            val = [x for x in val if isinstance(x, dict) and str(x.get(k)) == v]
+        results.append(val)
+    out = results[0] if len(results) == 1 else results
+    s = json.dumps(out, ensure_ascii=False, indent=2, default=str)
+    if len(s) > max_chars:
+        s = s[:max_chars] + f"\n... [truncated, {len(s)} chars total]"
+    head = f"[json_query path={base_expr or '$'}{(' | ' + filt) if filt else ''}; docs={len(docs)}]"
+    return f"{head}\n{s}"
 
 
 async def fs_find(path: str = ".", name: str = "*") -> str:
@@ -611,6 +699,16 @@ TOOL_DEFINITIONS = [
             "force_text": {"type": "boolean", "description": "Skip binary detection (default: false)"},
         },
         "required": ["pattern"],
+    }),
+    ("fs_json_query", fs_json_query, "Query a JSON/JSONL file with a light dotted expression "
+     "(e.g. states | id=main, states.0.detect) — for inspecting pretty-printed profiles", {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "JSON/JSONL file path"},
+            "expr": {"type": "string", "description": "Dotted path, optional '| key=value' filter"},
+            "max_chars": {"type": "integer", "description": "Cap on returned characters (default 8000)"},
+        },
+        "required": ["path"],
     }),
     ("fs_find", fs_find, "Find files by case-insensitive glob pattern", {
         "type": "object",

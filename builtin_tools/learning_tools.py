@@ -161,7 +161,9 @@ async def summarize_learning_session(session_dir: str = "", label: str = "", sav
     Args:
         session_dir: session folder (default: the most recent session).
         label: workflow/label name for the draft.
-        save: merge the observed states into the per-app profiles.
+        save: merge the observed states into the per-app profiles. With
+            ``save=false`` it is a dry run: nothing is written into the repo —
+            drafts go to ``data/tmp/`` and the result has ``dry_run: true``.
     """
     if not session_dir:
         session_dir = tracker.latest() or ""
@@ -301,7 +303,8 @@ TOOL_DEFINITIONS = [
         "returns a per-app diff (mode create/merge, before/after states+bytes, "
         "states_added/refreshed/removed, renames, guide action) plus a cross-app "
         "workflow draft (apps in order, steps referencing state + named control). "
-        "Review the draft, then save_workflow.",
+        "With save=false it is a dry run (dry_run:true): nothing is written into "
+        "the repo (drafts go to data/tmp/). Review the draft, then save_workflow.",
         {
             "type": "object",
             "properties": {

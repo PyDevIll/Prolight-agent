@@ -27,6 +27,8 @@ from loguru import logger
 from lib import discovery, learning_db, profiles, router
 from lib import window_state as ws
 
+ROOT = Path(__file__).resolve().parent.parent
+
 # layout-change thresholds (fraction of fingerprint difference / moved controls)
 SEG_KEY_DIFF = 0.25
 SEG_MOVED_FRAC = 0.4
@@ -652,25 +654,31 @@ def analyze_session(session_dir, label: str = "", save: bool = True,
     # ever truncated in a tool response.
     workflow_path = None
     program_path = None
+    # A dry run (save=false) must not touch the repo: write the drafts to a temp
+    # dir instead and report their paths + dry_run:true (item 8).
+    out_dir = learning_db.WORKFLOWS_DIR if save else (ROOT / "data" / "tmp")
     try:
-        learning_db.ensure_dirs()
+        out_dir.mkdir(parents=True, exist_ok=True)
         slug = program["key"]
-        wf = learning_db.WORKFLOWS_DIR / f"_draft_{slug}.md"
+        wf = out_dir / f"_draft_{slug}.md"
         wf.write_text(draft, encoding="utf-8")
         workflow_path = str(wf)
-        wj = learning_db.WORKFLOWS_DIR / f"_draft_{slug}.workflow.json"
+        wj = out_dir / f"_draft_{slug}.workflow.json"
         wj.write_text(json.dumps(program, ensure_ascii=False, indent=2), encoding="utf-8")
         program_path = str(wj)
     except Exception as e:
         logger.warning(f"session_analysis: could not write workflow draft: {e}")
     logger.info(f"session_analysis: keys={list(derived_by_key)} "
                 f"states={ {k: len(v) for k, v in derived_by_key.items()} } "
-                f"steps={len(program['steps'])}")
+                f"steps={len(program['steps'])} dry_run={not save}")
     return {
         "ok": True,
+        "dry_run": not save,
+        "applied": bool(save),
         "session_dir": str(session_dir),
         "keys": list(derived_by_key.keys()),
         "states": {k: len(v) for k, v in derived_by_key.items()},
+        "would_add": {k: len(v) for k, v in derived_by_key.items()},
         "profile_merges": merges,
         "workflow_name": label or "learned task",
         "workflow_path": workflow_path,

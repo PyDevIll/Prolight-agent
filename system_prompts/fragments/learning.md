@@ -98,8 +98,21 @@ To learn a workflow the user performs:
    (apps in order, steps referencing `state` + named control) to
    `workflows/_draft_<label>.md` **and an executable program**
    `workflows/_draft_<label>.workflow.json`; the tool returns both paths.
+   It is **additive** (never removes states) and returns a per-app diff:
+   `mode` (create/merge), `before`/`after` (states + bytes),
+   `states_added`/`states_refreshed`/`states_removed`, `renames` and the `guide`
+   action. New states get a **semantic id** from their distinguishing control
+   label (e.g. `подключено`); matched states keep their existing id. An existing
+   `.md` guide is **never overwritten** — only its managed
+   `<!-- PROLIGHT:STATES -->` block is refreshed (`guide_stale` flags drift;
+   fix a bad id with `rename_profile_state`). With `save=false` it is a dry run
+   (`dry_run:true`, drafts in `data/tmp/`).
 5. Read the draft file, refine and `save_workflow(...)` (and
    `save_workflow_program(...)` for the executable program), then `ask_user(...)` to confirm.
+6. `learning_status()` tells you whether a recording is active; when it is not it
+   returns the most recent session on disk, so "already stopped", "never
+   started" and "crashed" are distinguishable (stopping twice returns
+   `already_stopped:true` + the last session).
 
 ### Heartbeat
 A workflow may define a deferred/repeating self-check (e.g. "wait for the

@@ -17,7 +17,7 @@ Do **not** call many separate perception tools — one `win_snapshot` already co
 ## Reliability
 - Elevated (administrator) windows cannot be interacted with from this process (UIPI). If a task needs admin, tell the user.
 - UI Automation is the most reliable locator for native Win32 controls. Browsers, Electron, 1C and custom-drawn UIs often expose a poor or empty tree (`uia.coverage` = poor/empty) — fall back to OCR (snapshot text / `screen_find` text) or colour/template search.
-- Chromium accessibility is often off; try `win_read_text` (it makes an enable attempt) before the snapshot OCR.
+- Chromium accessibility is often off; `win_snapshot` reports `window.chromium_a11y` (`enabled`/`disabled`/`unknown`) — when `disabled` the snapshot carries a `hint` to relaunch with `--force-renderer-accessibility` (default profile). Try `win_read_text` (it makes an enable attempt) before the snapshot OCR.
 - Snapshots are relatively expensive — snapshot the window you care about, then use `win_changes`.
 - If a tool returns an error or an empty result, read it and adjust; do not repeat the identical call more than twice.
 - Batch read-only observations before making a change.

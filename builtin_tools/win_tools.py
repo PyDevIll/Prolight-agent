@@ -58,6 +58,23 @@ def _state_to_dict(state: ws.WindowState, vision: Optional[dict] = None) -> dict
         d["image"] = {**state.image_meta, "path": state.image_path}
     if state.notes:
         d["notes"] = state.notes
+    # Chromium renderer accessibility: make it explicit in the window identity so
+    # "one Pane, 0 texts" (a11y off) is never confused with a canvas app.
+    win = state.window or {}
+    proc = (win.get("process") or "").lower()
+    cls = (win.get("class") or "").lower()
+    is_chromium = any(b in proc for b in _CHROMIUM_PROC) or "chrome_widgetwin" in cls
+    if is_chromium and state.accessibility_enabled is not None:
+        a11y = "enabled" if state.accessibility_enabled else "disabled"
+    else:
+        a11y = "unknown"
+    if d.get("window") is not None:
+        d["window"]["chromium_a11y"] = a11y
+    if a11y == "disabled":
+        d["hint"] = ("Chromium renderer accessibility is OFF — relaunch the browser with "
+                     "--force-renderer-accessibility on the DEFAULT profile (no "
+                     "--user-data-dir; close the running instance first), then re-snapshot "
+                     "and use win_read_text.")
     if vision:
         d["vision"] = vision
     return d

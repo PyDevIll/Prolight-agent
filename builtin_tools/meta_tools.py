@@ -41,6 +41,10 @@ async def ask_user(question: str, options: list = None, timeout: float = 300.0,
     Use it before an uncertain or state-changing step (e.g. before clicking a
     control during an app discovery pass). Blocks until the user replies.
 
+    The answer is **free text** — it may be one of ``options``, a correction, or
+    a brand-new instruction (e.g. "summarize the learning session"). Treat it as
+    a command channel, not just a multiple-choice reply.
+
     Args:
         question: the question to ask.
         options: optional list of suggested answers to show.
@@ -129,7 +133,8 @@ TOOL_DEFINITIONS = [
         "required": [],
     }),
     ("ask_user", ask_user, "Ask the user a question and wait for their answer (for "
-     "uncertain or state-changing steps). Blocks until they reply. Optionally "
+     "uncertain or state-changing steps). Blocks until they reply. The answer is "
+     "free text and may be an instruction, not only one of the options. Optionally "
      "highlight the screen region(s) the question is about.", {
         "type": "object",
         "properties": {
