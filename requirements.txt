@@ -1,4 +1,5 @@
 openai~=2.46.0
+groq~=1.7.0
 loguru~=0.7.3
 tiktoken~=0.13.0
 python-dotenv~=1.2.2

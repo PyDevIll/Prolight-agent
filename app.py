@@ -227,7 +227,9 @@ async def start_app() -> None:
 
     registry.call_tool = _call_tool_with_overlay
 
-    # Helper agent for context compression
+    # Helper agent for context compression. Stays on DeepSeek (HELPER key) even
+    # when the main agent runs on Groq — it only summarizes, and its larger
+    # context budget suits long transcripts.
     helper_agent = Agent(
         name="HELPER",
         system_prompt="""## Values:
@@ -242,9 +244,26 @@ async def start_app() -> None:
     # Main agent. Prompt fragments + tool groups are selected per run by the
     # deterministic instruction planner (lib/instruction_planner.py), so no
     # fixed base prompts are passed here.
+    #
+    # Provider: DeepSeek (default) or Groq (`PROLIGHT_LLM=groq`). On Groq the
+    # vision sub-agent uses the same qwen model/key; HELPER stays on DeepSeek.
+    provider = (os.environ.get("PROLIGHT_LLM")
+                or os.environ.get("LLM_PROVIDER") or "deepseek").strip().lower()
     global agent
-    agent = Agent(use_tools=True, save_history=True)
+    if provider == "groq":
+        from agent_groq import build_mastermind, install_groq_vision
+        agent = build_mastermind(use_tools=True, save_history=True)
+        try:
+            install_groq_vision()
+        except Exception as e:
+            logger.error(f"Groq vision install failed — vision stays on DeepSeek: {e}")
+    else:
+        if provider != "deepseek":
+            logger.warning(f"Unknown PROLIGHT_LLM={provider!r} — using DeepSeek")
+            provider = "deepseek"
+        agent = Agent(use_tools=True, save_history=True)
     agent.add_helper_agent(helper_agent)
+    logger.info(f"Main LLM provider: {provider}")
 
     logger.info("Starting worker and console command loop...")
     worker_task = asyncio.create_task(worker())
