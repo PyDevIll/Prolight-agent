@@ -73,7 +73,14 @@ in your context — act on them directly.
 - Trigger checks are **ANDed**. Candidate keys are: title tail → title head →
   **tab host** (`web.max.ru` → `max`) → process name; a profile may also declare
   `also_matches` aliases. `trigger.url_contains` is **ignored** when no URL is
-  available (never silently disables) — prefer `process`/`also_matches`.
+  available (never silently disables) — prefer `process`/`also_matches`. The
+  runtime URL comes from the omnibox control value **or** the window's OCR text
+  (the top-most URL-like line); when neither is present the tab host is unknown.
+- When several profiles share one browser process (a web app inside Chrome) and
+  auto-selection cannot see the URL, drive the app **explicitly by name**:
+  `route_app_state(app="max")`, `resolve_app_control(name, app="max")`,
+  `execute_app_control(name, app="max")`. This is deterministic and needs no
+  workflow.
 - OCR is **lossy** in a predictable way (`Сообщение` → `Рообщение`): use
   unambiguous substring needles (avoid easily-confused letters), or make the
   control a coordinate control `{"match": {"click": [x, y]}}` (accepted forms:

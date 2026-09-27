@@ -258,46 +258,73 @@ def _ocr_scope(state, limit: int = 40) -> list:
     return out
 
 
-async def route_app_state() -> str:
+def _route_profile(state, app: str = ""):
+    """Pick the profile for ``state``: explicit ``app`` key, else the router's pick.
+
+    Returns ``(profile, error, key)``. The explicit ``app`` path lets a web app
+    that shares a browser process (e.g. MAX inside Chrome) be driven
+    deterministically by name even when auto-routing cannot see the page URL.
+    """
+    if app:
+        prof = profiles.load(app)
+        key = learning_db.normalize_key(app)
+        if prof is None:
+            return None, f"no profile {key!r}", key
+        return prof, "", key
+    win = state.window or {}
+    found = profiles.find_profile(
+        hwnd=state.hwnd, title=win.get("title", ""), process=win.get("process", ""),
+        url=state.active_url())
+    if not found:
+        return None, "no profile for this window", ""
+    key, prof = found
+    return prof, "", key
+
+
+async def route_app_state(app: str = "") -> str:
     """Run the deterministic router on the latest ``win_snapshot``.
 
     Returns the matched app/state, resolved named controls (with live ids), the
     fragment the agent would inject, and (for debugging ``detect``) the OCR
     lines it saw under ``ocr_scope``. Call ``win_snapshot`` first.
+
+    Args:
+        app: optional profile key to route **explicitly** (e.g. ``"max"``) instead
+            of auto-selecting — used when several profiles share one browser
+            process and the page URL is not available to the router.
     """
     from lib import window_state
     state = window_state.get()
     if state is None or not state.window:
         return _dump({"ok": False, "error": "no snapshot — call win_snapshot first"})
-    win = state.window or {}
-    found = profiles.find_profile(
-        hwnd=state.hwnd, title=win.get("title", ""), process=win.get("process", ""),
-        url=state.active_url())
+    prof, err, key = _route_profile(state, app)
     scope = _ocr_scope(state)
-    if not found:
+    if prof is None:
         return _dump({"ok": True, "matched": False, "ocr_scope": scope,
-                      "hint": "no profile for this window (load_app_profile / save_app_profile)"})
-    key, prof = found
+                      "available": [p["key"] for p in profiles.list_profiles()],
+                      "hint": err})
     result = router.route(prof, state, key)
-    return _dump({"ok": True, "matched": bool(result.get("state_id")),
+    return _dump({"ok": True, "matched": bool(result.get("state_id")), "profile": key,
                   "route": result, "ocr_scope": scope,
                   "volatile": router.volatile_text(result, prof)})
 
 
-async def resolve_app_control(name: str) -> str:
+async def resolve_app_control(name: str, app: str = "") -> str:
     """Resolve one logical control name (from the current profile state) to its
-    live element id / screen centre on the latest snapshot."""
+    live element id / screen centre on the latest snapshot.
+
+    Args:
+        name: logical control name.
+        app: optional profile key to use explicitly (default: the routed profile).
+    """
     from lib import window_state
     state = window_state.get()
     if state is None or not state.window:
         return _dump({"ok": False, "error": "no snapshot — call win_snapshot first"})
-    win = state.window or {}
-    found = profiles.find_profile(
-        hwnd=state.hwnd, title=win.get("title", ""), process=win.get("process", ""),
-        url=state.active_url())
-    if not found:
-        return _dump({"ok": False, "error": "no profile for this window"})
-    key, prof = found
+    prof, err, key = _route_profile(state, app)
+    if prof is None:
+        return _dump({"ok": False, "error": err,
+                      "available": [p["key"] for p in profiles.list_profiles()]})
     res = router.resolve_named(prof, state, name)
     if not res:
         return _dump({"ok": False, "error": f"control {name!r} not resolveable",
@@ -333,7 +360,8 @@ async def discover_app(
     return _dump(result)
 
 
-async def execute_app_control(name: str, action: str = "click", hwnd: int = None) -> str:
+async def execute_app_control(name: str, action: str = "click", hwnd: int = None,
+                              app: str = "") -> str:
     """Deterministically act on a profile's named control (no LLM).
 
     Resolves ``name`` against the current profile state and the latest snapshot,
@@ -343,6 +371,7 @@ async def execute_app_control(name: str, action: str = "click", hwnd: int = None
         name: logical control name from the current profile state.
         action: the action to perform.
         hwnd: target window (default: the snapshot's window).
+        app: optional profile key to use explicitly (default: the routed profile).
     """
     from lib import window_state
     from builtin_tools import uia_tools, mouse_tools, keybd_tools, win_tools
@@ -350,13 +379,10 @@ async def execute_app_control(name: str, action: str = "click", hwnd: int = None
     state = window_state.get()
     if state is None or not state.window:
         return _dump({"ok": False, "error": "no snapshot — call win_snapshot first"})
-    win = state.window or {}
-    found = profiles.find_profile(
-        hwnd=state.hwnd, title=win.get("title", ""), process=win.get("process", ""),
-        url=state.active_url())
-    if not found:
-        return _dump({"ok": False, "error": "no profile for this window"})
-    key, prof = found
+    prof, err, key = _route_profile(state, app)
+    if prof is None:
+        return _dump({"ok": False, "error": err,
+                      "available": [p["key"] for p in profiles.list_profiles()]})
     res = router.resolve_named(prof, state, name)
     if not res:
         return _dump({"ok": False, "error": f"control {name!r} not resolved in any state",
@@ -659,17 +685,27 @@ TOOL_DEFINITIONS = [
         "Run the deterministic router on the latest win_snapshot: returns the "
         "matched app state (most-specific rule wins), resolved named controls with "
         "live ids, also_matched (runner-up states) and rejections (why the other "
-        "states failed), and the fragment that would be injected.",
-        {"type": "object", "properties": {}, "required": []},
+        "states failed), and the fragment that would be injected. Pass `app` to "
+        "route a specific profile explicitly (e.g. a web app inside Chrome).",
+        {
+            "type": "object",
+            "properties": {
+                "app": {"type": "string", "description": "Optional profile key to route explicitly (e.g. 'max'), overriding auto-selection"},
+            },
+            "required": [],
+        },
     ),
     (
         "resolve_app_control",
         resolve_app_control,
         "Resolve one logical control name from the current profile state to its "
-        "live element id / screen centre.",
+        "live element id / screen centre. Pass `app` to use a specific profile.",
         {
             "type": "object",
-            "properties": {"name": {"type": "string", "description": "Logical control name"}},
+            "properties": {
+                "name": {"type": "string", "description": "Logical control name"},
+                "app": {"type": "string", "description": "Optional profile key to use explicitly"},
+            },
             "required": ["name"],
         },
     ),
@@ -706,6 +742,7 @@ TOOL_DEFINITIONS = [
                 "name": {"type": "string", "description": "Logical control name from the current profile state"},
                 "action": {"type": "string", "description": "click | double_click | right_click | hotkey | focus"},
                 "hwnd": {"type": "integer", "description": "Target window (default: the snapshot's window)"},
+                "app": {"type": "string", "description": "Optional profile key to use explicitly (e.g. 'max')"},
             },
             "required": ["name"],
         },

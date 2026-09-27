@@ -17,6 +17,7 @@ Sources merged into a snapshot:
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -125,24 +126,58 @@ class WindowState:
     def active_url(self) -> str:
         """Best-effort URL of this window's active browser tab (R24).
 
-        Reads the Chromium omnibox Edits ``value`` when renderer accessibility
-        exposes it (``automation_id`` ending ``view_1012`` / name like
-        'Адресная строка') or any control whose value is an explicit URL. Returns
-        ``""`` when unavailable (e.g. accessibility off) — callers must treat that
-        as *unknown*, not as *no match*.
+        Prefers a control ``value`` that is a URL, then the Chromium omnibox
+        (``view_1012`` / 'address'), then a URL-like token in the window's OCR
+        text — the omnibox is drawn in the browser chrome near the top, so the
+        top-most URL-like line wins. Returns ``""`` when unavailable (e.g.
+        accessibility off) - callers must treat that as *unknown*, not *no match*.
         """
+        url_re = re.compile(r"(https?://[^\s\"'>]+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s\"'>]*)?)", re.I)
+
+        def looks_url(v: str) -> str:
+            v = (v or "").strip()
+            if "://" in v and not any(c in v for c in " <>|"):
+                return v
+            m = url_re.search(v)
+            if not m:
+                return ""
+            tok = m.group(1)
+            # A bare "name.ext" only counts when it looks like a host (has a
+            # known-ish TLD or a path); avoid file names like "profile.json".
+            if "://" in tok:
+                return tok
+            if "/" in tok or "." in tok:
+                tld = tok.rsplit(".", 1)[-1].split("/", 1)[0].lower()
+                if "/" in tok or len(tld) in (2, 3) or tld in ("info", "online", "site", "tech", "store", "app", "dev"):
+                    return tok
+            return ""
+
+        # 1) control values (the omnibox is the most reliable)
         for c in self.controls:
-            val = (c.value or "").strip()
-            if not val:
-                continue
             aid = (c.automation_id or "").lower()
-            name = (c.name or "").lower()
+            nm = (c.name or "").lower()
             is_omnibox = (aid.endswith("view_1012") or "omnibox" in aid or "address" in aid
-                          or "адресная" in name or "адрес" in name)
-            if "://" in val:
-                return val
-            if is_omnibox and "." in val and " " not in val:
-                return val
+                          or "адрес" in nm)
+            u = looks_url(c.value)
+            if u and (is_omnibox or "://" in u):
+                return u
+            if is_omnibox:
+                u2 = looks_url(c.value)
+                if u2:
+                    return u2
+
+        # 2) OCR text: the top-most URL-like line (browser chrome / omnibox row)
+        win_top = ((self.window or {}).get("rect") or {}).get("top", 0) or 0
+        cands = []
+        for t in self.texts:
+            u = looks_url(t.name)
+            if not u:
+                continue
+            rel_y = (t.rect[1] - win_top) if t.rect else 10 ** 9
+            cands.append((rel_y, u))
+        if cands:
+            cands.sort(key=lambda x: x[0])
+            return cands[0][1]
         return ""
 
     def footprint(self, with_rects: bool = False) -> dict:
