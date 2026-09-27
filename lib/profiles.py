@@ -19,6 +19,7 @@ Guides remain valid on their own; profiles are an additive layer that
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from datetime import date
 from pathlib import Path
@@ -107,6 +108,24 @@ def validate(data: dict) -> list[str]:
                 if ctrls is not None and not isinstance(ctrls, dict):
                     problems.append(f"state[{sid or i}].controls must be an object")
     return problems
+
+
+def states_hash(profile: dict) -> str:
+    """Stable hash of the profile's state id set (for guide-sync checks)."""
+    ids = [s.get("id") for s in profile.get("states") or []]
+    return hashlib.sha1(",".join(sorted(i for i in ids if i)).encode("utf-8")).hexdigest()[:12]
+
+
+def guide_stale(profile: dict) -> bool:
+    """True when the guide's managed state block is out of sync with the profile.
+
+    Only meaningful once a profile has been synced (``guide_synced`` present);
+    hand-authored profiles without that marker are never reported stale.
+    """
+    gs = profile.get("guide_synced")
+    if not gs:
+        return False
+    return gs.get("ids_hash") != states_hash(profile)
 
 
 def template(key: str, display: str = "") -> dict:

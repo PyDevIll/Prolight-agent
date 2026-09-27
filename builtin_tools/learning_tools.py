@@ -119,10 +119,16 @@ async def stop_learning_session() -> str:
 async def summarize_learning_session(session_dir: str = "", label: str = "", save: bool = True) -> str:
     """Deterministically turn a recorded session into profiles + a workflow draft.
 
-    Rebuilds the settled ``WindowState`` captures, extends each app's profile
-    (additive: new states, refreshed footprints, merged named controls) and
+    Rebuilds the settled ``WindowState`` captures, **additively** extends each
+    app's profile (new states, refreshed footprints, merged named controls) and
     returns a cross-app workflow draft whose steps reference the app, state and
-    named control. No LLM call — review the draft, then ``save_workflow``.
+    named control. No LLM call.
+
+    The merge never removes states and never overwrites an existing ``.md`` guide
+    (only its managed ``PROLIGHT:STATES`` block is refreshed). ``profile_merges``
+    reports a full diff per app: ``mode`` (create/merge), ``before``/``after``
+    (states + bytes), ``states_added``/``states_refreshed``/``states_removed``
+    (id lists), ``renames`` and the ``guide`` action.
 
     Args:
         session_dir: session folder (default: the most recent session).
@@ -253,10 +259,13 @@ TOOL_DEFINITIONS = [
     (
         "summarize_learning_session",
         summarize_learning_session,
-        "Deterministically summarize a recorded learning session: extends each "
-        "app's profile with observed states/footprints/controls and returns a "
-        "cross-app workflow draft (apps in order, steps referencing state + named "
-        "control). Review the draft, then save_workflow.",
+        "Deterministically summarize a recorded learning session: additively "
+        "extends each app's profile (never removes states; never overwrites an "
+        "existing .md guide, only refreshes its managed PROLIGHT:STATES block) and "
+        "returns a per-app diff (mode create/merge, before/after states+bytes, "
+        "states_added/refreshed/removed, renames, guide action) plus a cross-app "
+        "workflow draft (apps in order, steps referencing state + named control). "
+        "Review the draft, then save_workflow.",
         {
             "type": "object",
             "properties": {

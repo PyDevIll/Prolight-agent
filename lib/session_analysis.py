@@ -260,20 +260,86 @@ def _normspec(spec) -> tuple:
             (m.get("name", "") or "").lower(), m.get("ocr", ""))
 
 
-def _unique_sid(prof: dict) -> str:
-    ids = {s.get("id") for s in prof.get("states", [])}
-    if not ids:
-        return "main"
-    i = len(ids) + 1
-    while f"state_{i}" in ids:
-        i += 1
-    return f"state_{i}"
+def _semantic_sid(d: dict, used: set) -> str:
+    """A stable, meaningful state id (item 2).
+
+    Prefer the state's **distinguishing actionable control label** (e.g. a toggle
+    ``Подключено`` → ``подключено``; the ``uia_all`` rule ``_sharpen_variants``
+    adds, else the first actionable named control). Fall back to ``main``/``state_N``
+    when there is no such label (e.g. Chromium states distinguished only by title).
+    ``used`` is updated with the returned id.
+    """
+    det = d.get("detect") or {}
+    label = ""
+    for rule in det.get("uia_all") or []:
+        if (rule.get("name") or "").strip():
+            label = rule["name"]
+            break
+    if not label:
+        st = d.get("_state")
+        if st is not None:
+            for c in st.controls:
+                if (c.control_type or "").lower() in ws._ACTIONABLE and (c.name or "").strip():
+                    label = c.name
+                    break
+    base = discovery.slugify(label, "") if label else ""
+    if not base:
+        base = "main" if "main" not in used else "state"
+    name, i = base, 2
+    while name in used:
+        name, i = f"{base}_{i}", i + 1
+    used.add(name)
+    return name
+
+
+def render_states_block(profile: dict) -> str:
+    """A compact managed table of the profile's states (for the guide block)."""
+    lines = ["## Profile states (managed block — auto-generated, do not edit)", "",
+             "| State | Distinguishing signal | Named controls |", "|---|---|---|"]
+    for s in profile.get("states") or []:
+        det = s.get("detect") or {}
+        sig = []
+        for rule in (det.get("uia_all") or []) + (det.get("uia_any") or []):
+            sig.append(rule.get("name") or rule.get("automation_id") or "")
+        sig_s = ", ".join(x for x in sig[:3] if x)
+        ctrls = ", ".join(list((s.get("controls") or {}).keys())[:8])
+        lines.append(f"| `{s.get('id')}` | {sig_s} | {ctrls} |")
+    return "\n".join(lines)
+
+
+def sync_guide_block(key: str, profile: dict) -> tuple:
+    """Refresh the managed state block in ``<key>.md``. Returns ``(path, action)``.
+
+    Creates the guide (from ``discovery.guide_markdown`` + the block) when it does
+    not exist; otherwise only the delimited block is replaced.
+    """
+    try:
+        if learning_db.read_guide(key) is None:
+            content = (discovery.guide_markdown(profile).rstrip() + "\n\n"
+                       + render_states_block(profile) + "\n")
+            path = learning_db.write_guide(key, content)
+            return str(path), "created"
+        path = learning_db.upsert_states_block(key, render_states_block(profile))
+        return str(path), "updated"
+    except Exception as e:
+        logger.warning(f"session_analysis: could not sync guide block for {key}: {e}")
+        return None, "error"
 
 
 def merge_profile(key: str, derived: list, window: dict) -> dict:
-    """Additively merge observed states into ``<key>.profile.json``."""
+    """Additively merge observed states into ``<key>.profile.json``.
+
+    Returns a full **diff** of the mutation (item 1): ``mode`` (create/merge),
+    ``before``/``after`` (state count + file bytes), the id lists
+    ``states_added``/``states_refreshed``/``states_removed``, a ``renames`` map
+    and the ``guide`` action — so nothing about the profile change is implicit.
+    """
+    before_path = profiles.profile_path(key)
+    before_exists = before_path.exists()
+    before_bytes = before_path.stat().st_size if before_exists else 0
     existing = profiles.load(key)
     fresh = existing is None
+    before_ids = [s.get("id") for s in (existing or {}).get("states", [])]
     prof = existing or profiles.template(key, display=(window or {}).get("title") or key)
     if fresh:
         prof["states"] = []  # drop the template placeholder; learned states become the profile
@@ -285,6 +351,9 @@ def merge_profile(key: str, derived: list, window: dict) -> dict:
     if proc and proc not in prof["trigger"].setdefault("process", []):
         prof["trigger"]["process"].append(proc)
 
+    added_ids: list = []
+    refreshed_ids: list = []
+    used_ids = {s.get("id") for s in prof["states"]}
     added_states = refreshed = added_controls = 0
     capture_map: dict = {}
     for d in derived:
@@ -297,11 +366,12 @@ def merge_profile(key: str, derived: list, window: dict) -> dict:
                 match = ex
                 break
         if match is None:
-            sid = _unique_sid(prof)
+            sid = _semantic_sid(d, used_ids)
             prof["states"].append({"id": sid, "detect": d["detect"], "text": d["text"],
                                    "controls": d["controls"]})
             prof["footprints"][sid] = d["footprint"]
             added_states += 1
+            added_ids.append(sid)
         else:
             sid = match["id"]
             fp = prof["footprints"].setdefault(sid, {})
@@ -318,21 +388,37 @@ def merge_profile(key: str, derived: list, window: dict) -> dict:
             if not match.get("text") and d.get("text"):
                 match["text"] = d["text"]
             refreshed += 1
+            refreshed_ids.append(sid)
         for cid in d.get("captures") or []:
             capture_map[cid] = sid
 
+    after_ids = [s.get("id") for s in prof["states"]]
     prof["updated"] = date.today().isoformat()
+    prof["guide_synced"] = {"ids_hash": profiles.states_hash(prof),
+                            "states": after_ids, "updated": prof["updated"]}
     path = profiles.save(key, prof)
+
     guide_path = None
+    guide_action = "untouched"
     try:
-        if not learning_db.read_guide(key):
-            guide_path = str(learning_db.write_guide(key, discovery.guide_markdown(prof)))
+        guide_path, guide_action = sync_guide_block(key, prof)
     except Exception as e:
-        logger.warning(f"session_analysis: could not seed guide for {key}: {e}")
-    return {"key": key, "path": str(path), "guide_path": guide_path,
-            "states_added": added_states, "states_refreshed": refreshed,
-            "controls_added": added_controls, "states_total": len(prof["states"]),
-            "capture_states": capture_map}
+        logger.warning(f"session_analysis: could not sync guide for {key}: {e}")
+
+    return {
+        "key": key,
+        "mode": "create" if fresh else "merge",
+        "path": str(path),
+        "before": {"exists": before_exists, "states": len(before_ids), "bytes": before_bytes},
+        "after": {"states": len(after_ids), "bytes": path.stat().st_size},
+        "states_added": [i for i in added_ids],
+        "states_refreshed": [i for i in refreshed_ids],
+        "states_removed": [i for i in before_ids if i not in after_ids],
+        "renames": {},
+        "controls_added": added_controls,
+        "guide": {"path": guide_path, "action": guide_action},
+        "capture_states": capture_map,
+    }
 
 
 # ── workflow draft ────────────────────────────────────────────────────────

@@ -189,6 +189,37 @@ def list_guides() -> list[dict]:
     ]
 
 
+# Managed state table: only this delimited block is machine-refreshed; the rest of
+# the guide is hand-written prose and is never touched by profile merges.
+STATES_BLOCK_START = "<!-- PROLIGHT:STATES -->"
+STATES_BLOCK_END = "<!-- /PROLIGHT:STATES -->"
+
+
+def upsert_states_block(key: str, block: str) -> Path:
+    """Insert/replace the managed ``PROLIGHT:STATES`` block in ``<key>.md``.
+
+    Everything outside the block is preserved. Creates the guide when missing.
+    """
+    ensure_dirs()
+    path = GUIDES_DIR / f"{normalize_key(key)}.md"
+    block = (block or "").strip()
+    if not block.startswith(STATES_BLOCK_START):
+        block = f"{STATES_BLOCK_START}\n{block}\n{STATES_BLOCK_END}"
+    if path.exists():
+        text = path.read_text(encoding="utf-8")
+        if STATES_BLOCK_START in text and STATES_BLOCK_END in text:
+            pre = text[: text.index(STATES_BLOCK_START)]
+            post = text[text.index(STATES_BLOCK_END) + len(STATES_BLOCK_END):]
+            text = pre + block + post
+        else:
+            text = text.rstrip() + "\n\n" + block + "\n"
+    else:
+        text = block + "\n"
+    path.write_text(text, encoding="utf-8")
+    logger.info(f"learning_db: synced states block in {path.name}")
+    return path
+
+
 def guide_template(name: str) -> str:
     return (
         f"# {name} — interaction guide\n\n"

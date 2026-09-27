@@ -17,6 +17,7 @@ Backed by ``lib/profiles.py`` and ``lib/router.py``. See ``system_prompts/learni
 """
 
 import json
+from datetime import date
 
 from loguru import logger
 
@@ -50,6 +51,7 @@ async def load_app_profile(
                 "profile": prof,
                 "guide": learning_db.read_guide(key) or "",
                 "path": str(profiles.profile_path(key)),
+                "guide_stale": profiles.guide_stale(prof),
                 "problems": profiles.validate(prof),
             })
     default = cands[-1] if cands else (learning_db.normalize_key(name) or "unnamed")
@@ -218,6 +220,7 @@ async def validate_profile(name: str = "") -> str:
                           "available": [p["key"] for p in profiles.list_profiles()]})
         out = {"ok": True, "key": prof.get("key") or learning_db.normalize_key(name),
                "problems": profiles.validate(prof),
+               "guide_stale": profiles.guide_stale(prof),
                "states": [s.get("id") for s in prof.get("states") or []]}
         from lib import window_state
         st = window_state.get()
@@ -285,6 +288,46 @@ async def delete_profile(key: str, also_guide: bool = False) -> str:
             removed["guide"] = str(md)
     logger.info(f"delete_profile: {key!r} removed={list(removed)}")
     return _dump({"ok": bool(removed), "key": learning_db.normalize_key(key), "removed": removed})
+
+
+async def rename_profile_state(key: str, old: str, new: str) -> str:
+    """Rename a profile state id (and its footprint + guide block).
+
+    Use this to give a state a clearer id (or to re-point one), instead of a
+    silent renumbering. Returns a ``renames`` map so workflows/guides can be
+    updated. The managed guide block is refreshed.
+
+    Args:
+        key: profile key.
+        old: current state id.
+        new: new state id.
+    """
+    from lib import session_analysis
+    prof = profiles.load(key)
+    if prof is None:
+        return _dump({"ok": False, "error": f"no profile {key!r}"})
+    new_id = learning_db.normalize_key(new).replace(" ", "_") or new
+    if any(s.get("id") == new_id for s in prof.get("states") or []):
+        return _dump({"ok": False, "error": f"state {new_id!r} already exists"})
+    hit = False
+    for s in prof.get("states") or []:
+        if s.get("id") == old:
+            s["id"] = new_id
+            hit = True
+    if not hit:
+        return _dump({"ok": False, "error": f"no state {old!r}",
+                      "states": [s.get("id") for s in prof.get("states") or []]})
+    fps = prof.get("footprints") or {}
+    if old in fps:
+        fps[new_id] = fps.pop(old)
+    prof["guide_synced"] = {"ids_hash": profiles.states_hash(prof),
+                            "states": [s.get("id") for s in prof.get("states") or []],
+                            "updated": date.today().isoformat()}
+    path = profiles.save(key, prof)
+    gpath, gaction = session_analysis.sync_guide_block(key, prof)
+    logger.info(f"rename_profile_state: {key} {old!r} -> {new_id!r}")
+    return _dump({"ok": True, "key": key, "renames": {old: new_id}, "path": str(path),
+                  "guide": {"path": gpath, "action": gaction}})
 
 
 GROUP = "learning"
@@ -374,6 +417,22 @@ TOOL_DEFINITIONS = [
                 "hwnd": {"type": "integer", "description": "Target window (default: the snapshot's window)"},
             },
             "required": ["name"],
+        },
+    ),
+    (
+        "rename_profile_state",
+        rename_profile_state,
+        "Rename a profile state id (and its footprint + guide block), returning a "
+        "renames map. Use it to give a state a clearer id instead of a silent "
+        "renumbering.",
+        {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "Profile key"},
+                "old": {"type": "string", "description": "Current state id"},
+                "new": {"type": "string", "description": "New state id"},
+            },
+            "required": ["key", "old", "new"],
         },
     ),
     (
