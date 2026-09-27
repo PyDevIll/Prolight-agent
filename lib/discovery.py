@@ -219,6 +219,58 @@ def guide_markdown(profile: dict) -> str:
     return "\n".join(lines)
 
 
+def _unique_state_id(prof: dict) -> str:
+    ids = {s.get("id") for s in prof.get("states") or []}
+    i = len(ids) + 1
+    while f"state_{i}" in ids:
+        i += 1
+    return f"state_{i}"
+
+
+def _detect_sig(state: dict) -> str:
+    import json
+    return json.dumps(state.get("detect") or {}, sort_keys=True, ensure_ascii=False)
+
+
+def _merge_discovered(existing: dict, new: dict) -> tuple[dict, dict]:
+    """Additively merge a freshly discovered single-state profile into ``existing``.
+
+    A state with an identical ``detect`` signature is *refreshed* (footprint),
+    never duplicated; otherwise the new state is appended under a unique id. The
+    trigger process list is unioned. Mirrors ``session_analysis``'s additive
+    contract so a discovery can never wipe the curated profile.
+    """
+    import copy
+    prof = copy.deepcopy(existing)
+    prof.setdefault("states", [])
+    prof.setdefault("footprints", {})
+    nstate = dict(new["states"][0])
+    sig = _detect_sig(nstate)
+    same = next((s for s in prof["states"] if _detect_sig(s) == sig), None)
+    added, refreshed = [], []
+    if same:
+        same["controls"] = {**(same.get("controls") or {}), **(nstate.get("controls") or {})}
+        same["text"] = nstate.get("text") or same.get("text", "")
+        prof["footprints"][same["id"]] = new["footprints"]["main"]
+        refreshed.append(same["id"])
+    else:
+        sid = "main" if not any(s.get("id") == "main" for s in prof["states"]) else _unique_state_id(prof)
+        nstate["id"] = sid
+        prof["states"].append(nstate)
+        prof["footprints"][sid] = new["footprints"]["main"]
+        added.append(sid)
+    trig = prof.get("trigger") or {}
+    procs = sorted(set(trig.get("process") or []) | set((new.get("trigger") or {}).get("process") or []))
+    if procs:
+        trig["process"] = procs
+    prof["trigger"] = trig
+    prof["version"] = int(existing.get("version", 1) or 1) + 1
+    prof["updated"] = date.today().isoformat()
+    diff = {"mode": "merge", "states_added": added, "states_refreshed": refreshed,
+            "before": len(existing.get("states") or []), "after": len(prof["states"])}
+    return prof, diff
+
+
 async def discover_app(
     hwnd: Optional[int] = None,
     name: str = "",
@@ -226,8 +278,16 @@ async def discover_app(
     include_ocr: bool = True,
     max_controls: int = 40,
     write_guide: bool = True,
+    merge: bool = True,
 ) -> dict:
-    """Capture a window and build/save a deterministic profile for it."""
+    """Capture a window and build/save a deterministic profile for it.
+
+    ``save=True`` **merges** by default: a state whose ``detect`` matches an
+    existing one is refreshed, otherwise it is added — an existing curated
+    profile is never replaced by a single discovered state. Pass ``merge=False``
+    to replace (a ``warning`` is then included). The derived profile is always
+    returned under ``profile``, even in dry-run.
+    """
     from lib import window_state, winapi
 
     hwnd = int(hwnd) if hwnd is not None else (winapi.get_foreground_window() or 0)
@@ -237,28 +297,51 @@ async def discover_app(
         res = learning_db.resolve_guide(hwnd=hwnd, url=window_state.active_url())
         name = res.get("key") or "unnamed"
 
+    include = {"uia", "menu", "focus"}
+    if include_ocr:
+        include.add("text")
     state = await window_state.capture_state(
-        hwnd=hwnd, include={"uia", "menu", "focus"}, max_controls=max(200, max_controls * 4)
+        hwnd=hwnd, include=include,
+        max_controls=max(200, max_controls * 4), max_text=max(120, max_controls * 3),
     )
     if not state.window:
         return {"ok": False, "error": f"cannot read window {hwnd}"}
 
     profile = build_profile(state, name, include_ocr=include_ocr, max_controls=max_controls)
+    existing = profiles.load(profile["key"])
     result = {
         "ok": True, "key": profile["key"], "process": (state.window or {}).get("process"),
         "states": len(profile["states"]),
         "controls": len(profile["states"][0]["controls"]),
         "footprint_keys": len(profile["footprints"]["main"]["keys"]),
         "summary": profile["initial_text"],
+        "ocr_lines": len(state.texts),
         "problems": profiles.validate(profile),
+        "existing_states": len(existing.get("states") or []) if existing else 0,
+        "profile": profile,
     }
+    if not include_ocr:
+        result["note"] = "OCR was not captured (include_ocr=false): detect rules may be weaker."
+    elif state.texts == []:
+        result["note"] = ("0 OCR lines — the window may be occluded or not foreground; "
+                          "state detection may be degenerate.")
     if save:
-        path = profiles.save(profile["key"], profile)
+        if existing and merge:
+            merged, diff = _merge_discovered(existing, profile)
+            path = profiles.save(profile["key"], merged)
+            result["mode"] = "merge"
+            result["profile_merge"] = diff
+        else:
+            if existing:
+                result["warning"] = (f"REPLACING an existing profile with "
+                                     f"{len(existing.get('states') or [])} state(s) by 1 — "
+                                     "use merge=True to keep them")
+            path = profiles.save(profile["key"], profile)
+            result["mode"] = "replace"
         result["profile_path"] = str(path)
         if write_guide and not learning_db.read_guide(profile["key"]):
             gpath = learning_db.write_guide(profile["key"], guide_markdown(profile))
             result["guide_path"] = str(gpath)
-        result["profile"] = profile
     logger.info(f"discover_app: {profile['key']} controls={result['controls']} "
-                f"footprint_keys={result['footprint_keys']}")
+                f"footprint_keys={result['footprint_keys']} ocr={result['ocr_lines']}")
     return result

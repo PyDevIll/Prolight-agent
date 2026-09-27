@@ -21,7 +21,7 @@ from typing import Optional
 
 from loguru import logger
 
-from lib import winapi
+from lib import winapi, textio
 
 ROOT = Path(__file__).resolve().parent.parent
 GUIDES_DIR = ROOT / "interaction_guides"
@@ -177,13 +177,13 @@ def resolve_app_key(hwnd: Optional[int] = None, title: str = "", process: str = 
 # ── guides ────────────────────────────────────────────────────────────────
 def read_guide(key: str) -> Optional[str]:
     path = GUIDES_DIR / f"{normalize_key(key)}.md"
-    return path.read_text(encoding="utf-8") if path.exists() else None
+    return textio.read_text(path)[0] if path.exists() else None
 
 
 def write_guide(key: str, content: str) -> Path:
     ensure_dirs()
     path = GUIDES_DIR / f"{normalize_key(key)}.md"
-    path.write_text(content, encoding="utf-8")
+    textio.write_text(path, content)
     logger.info(f"learning_db: wrote guide {path.name} ({len(content)} chars)")
     return path
 
@@ -195,7 +195,7 @@ def append_fact(key: str, fact: str, section: str = "Notes") -> Path:
     heading = f"## {section}"
     bullet = f"- {fact.strip()}"
     if path.exists():
-        text = path.read_text(encoding="utf-8")
+        text = textio.read_text(path)[0]
         lines = text.rstrip().splitlines()
         try:
             idx = next(i for i, ln in enumerate(lines) if ln.strip().lower() == heading.lower())
@@ -209,9 +209,109 @@ def append_fact(key: str, fact: str, section: str = "Notes") -> Path:
             text = "\n".join(lines) + "\n"
     else:
         text = f"# {key}\n\n{heading}\n{bullet}\n"
-    path.write_text(text, encoding="utf-8")
+    textio.write_text(path, text)
     logger.info(f"learning_db: appended fact to {path.name} [{section}]")
     return path
+
+
+def _section_heading(section: str) -> str:
+    name = (section or "").lstrip("#").strip()
+    return f"## {name}" if name else ""
+
+
+def _section_bounds(lines: list[str], heading: str) -> tuple[int, int]:
+    """Return ``(start, end)`` of a ``## heading`` section body, or ``(-1, -1)``.
+
+    ``start`` is the heading line index, ``end`` the exclusive end of its body
+    (the next heading of level <= 2, or the managed STATES block).
+    """
+    target = heading.strip().lower()
+    start = next((i for i, ln in enumerate(lines) if ln.strip().lower() == target), -1)
+    if start < 0:
+        return -1, -1
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        s = lines[i].lstrip()
+        if s.startswith("#") and not s.startswith("###"):
+            end = i
+            break
+        if s.startswith(STATES_BLOCK_START):
+            end = i
+            break
+    return start, end
+
+
+def upsert_section(
+    key: str, section: str, content: str = "", mode: str = "append",
+) -> dict:
+    """Deterministically edit one ``## <section>`` of a guide (no whole-file rewrite).
+
+    ``mode``:
+      * ``append`` — add ``content`` at the end of the section body (creates it);
+      * ``prepend`` — add it at the top of the section body;
+      * ``replace`` — replace the whole body (empty ``content`` removes the section).
+
+    Everything else in the file (other sections, the managed STATES block,
+    ``# title``) is preserved. Returns a small diff for review.
+    """
+    ensure_dirs()
+    path = GUIDES_DIR / f"{normalize_key(key)}.md"
+    key_norm = normalize_key(key)
+    existed = path.exists()
+    text = textio.read_text(path)[0] if existed else f"# {key_norm}\n"
+    heading = _section_heading(section)
+    if not heading:
+        return {"ok": False, "error": "empty section name"}
+    mode = (mode or "append").lower()
+    body = (content or "").strip("\n")
+
+    lines = text.split("\n")
+    start, end = _section_bounds(lines, heading)
+    action = "unchanged"
+
+    if mode == "replace" or (mode == "replace" and not body):
+        if start >= 0:
+            if body:
+                lines = lines[:start] + [heading] + body.split("\n") + [""] + lines[end:]
+                action = "replaced"
+            else:
+                del lines[start:end]
+                while start > 0 and start - 1 < len(lines) and lines[start - 1].strip() == "":
+                    del lines[start - 1]
+                    start -= 1
+                action = "removed"
+        else:
+            if not body:
+                action = "unchanged"
+            else:
+                lines = lines + [""] + [heading] + body.split("\n") + [""]
+                action = "created"
+    else:  # append / prepend
+        if not body:
+            action = "unchanged"
+        elif start < 0:
+            lines = lines + [""] + [heading] + body.split("\n") + [""]
+            action = "created"
+        else:
+            section_body = lines[start + 1:end]
+            if mode == "prepend":
+                new_body = body.split("\n") + section_body
+            else:
+                new_body = section_body
+                while new_body and new_body[-1].strip() == "":
+                    new_body = new_body[:-1]
+                new_body = new_body + [""] + body.split("\n")
+            lines = lines[:start + 1] + new_body + lines[end:]
+            action = "updated"
+
+    new_text = "\n".join(lines).rstrip("\n") + "\n"
+    textio.write_text(path, new_text)
+    logger.info(f"learning_db: upsert_section {path.name} [{heading}] {mode} -> {action}")
+    return {
+        "ok": True, "key": key_norm, "path": str(path), "section": heading,
+        "mode": mode, "action": action, "created_file": not existed,
+        "chars_before": len(text), "chars_after": len(new_text),
+    }
 
 
 def list_guides() -> list[dict]:
@@ -239,7 +339,7 @@ def upsert_states_block(key: str, block: str) -> Path:
     if not block.startswith(STATES_BLOCK_START):
         block = f"{STATES_BLOCK_START}\n{block}\n{STATES_BLOCK_END}"
     if path.exists():
-        text = path.read_text(encoding="utf-8")
+        text = textio.read_text(path)[0]
         if STATES_BLOCK_START in text and STATES_BLOCK_END in text:
             pre = text[: text.index(STATES_BLOCK_START)]
             post = text[text.index(STATES_BLOCK_END) + len(STATES_BLOCK_END):]
@@ -248,7 +348,7 @@ def upsert_states_block(key: str, block: str) -> Path:
             text = text.rstrip() + "\n\n" + block + "\n"
     else:
         text = block + "\n"
-    path.write_text(text, encoding="utf-8")
+    textio.write_text(path, text)
     logger.info(f"learning_db: synced states block in {path.name}")
     return path
 
@@ -278,13 +378,13 @@ def guide_template(name: str) -> str:
 # ── workflows ─────────────────────────────────────────────────────────────
 def read_workflow(key: str) -> Optional[str]:
     path = WORKFLOWS_DIR / f"{normalize_key(key)}.md"
-    return path.read_text(encoding="utf-8") if path.exists() else None
+    return textio.read_text(path)[0] if path.exists() else None
 
 
 def write_workflow(key: str, content: str) -> Path:
     ensure_dirs()
     path = WORKFLOWS_DIR / f"{normalize_key(key)}.md"
-    path.write_text(content, encoding="utf-8")
+    textio.write_text(path, content)
     logger.info(f"learning_db: wrote workflow {path.name} ({len(content)} chars)")
     return path
 

@@ -279,22 +279,29 @@ async def resolve_app_control(name: str) -> str:
 
 async def discover_app(
     hwnd: int = None, name: str = "", save: bool = True,
-    include_ocr: bool = True, write_guide: bool = True,
+    include_ocr: bool = True, write_guide: bool = True, merge: bool = True,
 ) -> str:
     """Deterministically discover an app: snapshot it, derive a profile
     (trigger, state detect rules, named controls, footprint) with no LLM call,
     and save ``<key>.profile.json`` (+ a starting ``<key>.md`` if none exists).
 
+    The derived profile is always returned (even with ``save=false``), and
+    ``save=true`` **merges** into an existing profile by default (a matching
+    ``detect`` refreshes its footprint; otherwise a new state is added) so a
+    curated multi-state profile is never replaced by one state.
+
     Args:
         hwnd: window to discover (default: foreground).
         name: profile key (default: resolved from the window/process).
         save: write the profile (and guide) to disk.
-        include_ocr: also map OCR texts to named controls.
+        include_ocr: also map OCR texts to named controls (and detect rules).
         write_guide: write ``<key>.md`` when none exists.
+        merge: additive merge into an existing profile (default true; false replaces).
     """
     from lib import discovery
     result = await discovery.discover_app(
-        hwnd=hwnd, name=name, save=save, include_ocr=include_ocr, write_guide=write_guide)
+        hwnd=hwnd, name=name, save=save, include_ocr=include_ocr,
+        write_guide=write_guide, merge=merge)
     return _dump(result)
 
 
@@ -639,7 +646,9 @@ TOOL_DEFINITIONS = [
         discover_app,
         "Deterministically discover an app: snapshot it, derive a profile "
         "(trigger, state detect rules, named controls, footprint) with no LLM "
-        "call, and save <key>.profile.json (+ a starting <key>.md if none).",
+        "call, and save <key>.profile.json (+ a starting <key>.md if none). "
+        "Always returns the derived profile (dry-run too); save=true merges "
+        "additively into an existing profile unless merge=false.",
         {
             "type": "object",
             "properties": {
@@ -648,6 +657,7 @@ TOOL_DEFINITIONS = [
                 "save": {"type": "boolean", "description": "Write the profile/guide to disk (default true)"},
                 "include_ocr": {"type": "boolean", "description": "Also map OCR texts to controls (default true)"},
                 "write_guide": {"type": "boolean", "description": "Write <key>.md when none exists (default true)"},
+                "merge": {"type": "boolean", "description": "Additively merge into an existing profile; false replaces it (default true)"},
             },
             "required": [],
         },

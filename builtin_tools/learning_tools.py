@@ -4,7 +4,7 @@ Backed by ``lib/learning_db.py`` (file DB) and ``components/tracker.py``
 (recording the user's real actions). See ``system_prompts/learning.md``.
 
 Tools:
-  - list_guides / load_interaction_guide / save_interaction_guide / note_fact
+  - list_guides / load_interaction_guide / save_interaction_guide / note_fact / guide_upsert
   - list_workflows / load_workflow / save_workflow / find_workflow
   - start_learning_session / stop_learning_session
 """
@@ -71,6 +71,26 @@ async def note_fact(app: str, fact: str, section: str = "Notes") -> str:
     path = learning_db.append_fact(app, fact, section=section)
     return _dump({"ok": True, "key": learning_db.normalize_key(app),
                   "path": str(path), "section": section})
+
+
+async def guide_upsert(app: str, section: str, content: str = "", mode: str = "append") -> str:
+    """Deterministically edit ONE section of an interaction guide.
+
+    Prefer this over ``fs_edit``/``fs_write_file`` for guides: it preserves every
+    other section, the ``# title`` and the managed ``PROLIGHT:STATES`` block, so
+    a partial edit can never truncate the guide. ``mode``:
+    ``append`` (add to the end of the section), ``prepend`` (add to its top),
+    ``replace`` (replace the whole body; an empty ``content`` removes the section).
+    The section is created when missing.
+
+    Args:
+        app: guide key / app name.
+        section: the ``## heading`` name (with or without ``## ``).
+        content: markdown body (usually bullet lines).
+        mode: append | prepend | replace.
+    """
+    result = learning_db.upsert_section(app, section, content=content, mode=mode)
+    return _dump(result)
 
 
 async def list_workflows() -> str:
@@ -234,6 +254,24 @@ TOOL_DEFINITIONS = [
                 "section": {"type": "string", "description": "Section heading (default 'Notes')"},
             },
             "required": ["app", "fact"],
+        },
+    ),
+    (
+        "guide_upsert",
+        guide_upsert,
+        "Deterministically edit ONE section of an interaction guide (## heading) "
+        "without rewriting the file: preserves other sections and the managed "
+        "STATES block. mode=append|prepend|replace (empty content + replace "
+        "removes the section). Use this instead of fs_edit/fs_write_file for guides.",
+        {
+            "type": "object",
+            "properties": {
+                "app": {"type": "string", "description": "Guide key / app name"},
+                "section": {"type": "string", "description": "Section heading, e.g. 'Gotchas'"},
+                "content": {"type": "string", "description": "Markdown body (usually bullet lines)"},
+                "mode": {"type": "string", "description": "append | prepend | replace (default append)"},
+            },
+            "required": ["app", "section"],
         },
     ),
     (

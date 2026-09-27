@@ -14,6 +14,8 @@ from loguru import logger
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from lib import textio
+
 _current_dir: Path = Path.cwd()
 
 
@@ -34,30 +36,13 @@ def human_size(size_bytes: int) -> str:
 
 
 def _is_binary(filepath: str, sample_size: int = 1024) -> bool:
+    """Delegate to the shared UTF-8-safe detector (handles Cyrillic/cp1251)."""
     try:
         with open(filepath, 'rb') as f:
             data = f.read(sample_size)
     except Exception:
         return False
-
-    if not data:
-        return False
-
-    # Null bytes are almost always a sign of binary data
-    if b'\x00' in data:
-        return True
-
-    # If the sample can be decoded as UTF-8, it's text (including Cyrillic)
-    try:
-        data.decode('utf-8')
-        return False
-    except UnicodeDecodeError:
-        pass
-
-    # Fallback heuristic for other encodings or mixed content
-    printable = set(range(0x20, 0x7f)) | {0x09, 0x0a, 0x0d}
-    non_printable = sum(1 for b in data if b not in printable)
-    return (non_printable / len(data)) > 0.30
+    return textio.is_probably_binary(data, sample_size=sample_size)
 
 
 _GREP_META = re.compile(r"[|()\[\]{}^$*+?\\]")
@@ -100,8 +85,12 @@ async def fs_tree(path: str = ".", depth: int = 2, ascii_mode: bool = False) -> 
     return '\n'.join(lines)
 
 
-async def fs_read(file: str, lines: int = 30, start: int = 1) -> str:
-    """Read file content with binary detection and size-aware truncation."""
+async def fs_read(file: str, lines: int = 30, start: int = 1, force_text: bool = False) -> str:
+    """Read file content with binary detection and size-aware truncation.
+
+    ``force_text=True`` bypasses binary detection; reads are always lenient
+    (a stray non-UTF-8 byte never raises — the file is decoded as cp1251/replace).
+    """
     p = _safe_path(file)
     if not p.exists():
         return f"File not found: {file}"
@@ -111,12 +100,16 @@ async def fs_read(file: str, lines: int = 30, start: int = 1) -> str:
         size = p.stat().st_size
     except OSError as e:
         return f"Error: {e}"
-    if _is_binary(str(p)):
-        return f"Binary file detected ({human_size(size)})"
     try:
-        content = p.read_text(encoding='utf-8', errors='replace')
-    except Exception as e:
+        content, meta = textio.read_text(p, force_text=force_text)
+    except OSError as e:
         return f"Error reading file: {e}"
+    if meta.get("binary"):
+        bad = meta.get("bad_byte") or {}
+        where = (f" first bad byte {bad.get('byte')} at offset {bad.get('offset')}"
+                 if bad else "")
+        return (f"Binary file detected ({human_size(size)}){where}. "
+                "Use force_text=True to read it anyway.")
     all_lines = content.split('\n')
     total = len(all_lines)
     if size > 128 * 1024:
@@ -140,7 +133,7 @@ async def fs_read(file: str, lines: int = 30, start: int = 1) -> str:
     return '\n'.join(out)
 
 
-async def fs_tail(file: str, lines: int = 10) -> str:
+async def fs_tail(file: str, lines: int = 10, force_text: bool = False) -> str:
     """Read last N lines of a text file (like tail)."""
     p = _safe_path(file)
     if not p.exists():
@@ -149,12 +142,12 @@ async def fs_tail(file: str, lines: int = 10) -> str:
         size = p.stat().st_size
     except OSError as e:
         return f"Error: {e}"
-    if _is_binary(str(p)):
-        return f"Binary file detected ({human_size(size)})"
     try:
-        content = p.read_text(encoding='utf-8', errors='replace')
-    except Exception as e:
+        content, meta = textio.read_text(p, force_text=force_text)
+    except OSError as e:
         return f"Error reading file: {e}"
+    if meta.get("binary"):
+        return f"Binary file detected ({human_size(size)}). Use force_text=True to read it anyway."
     all_lines = content.split('\n')
     total = len(all_lines)
     n = min(lines, 200)
@@ -275,7 +268,7 @@ async def fs_grep(
 
         # Stream line by line to avoid memory blow
         try:
-            with open(fp, 'r', encoding='utf-8', errors='replace' if force_text else 'strict') as f:
+            with open(fp, 'r', encoding='utf-8', errors='replace') as f:
                 for lineno, line in enumerate(f, 1):
                     bytes_read += len(line)
                     line = line.rstrip('\n')
@@ -389,7 +382,7 @@ async def _grep_single_file(
     scanned = 0
     MAX_MATCHES = 100
     try:
-        with open(fp, 'r', encoding='utf-8', errors='replace' if force_text else 'strict') as f:
+        with open(fp, 'r', encoding='utf-8', errors='replace') as f:
             for lineno, line in enumerate(f, 1):
                 scanned += len(line)
                 line = line.rstrip('\n')
@@ -601,12 +594,12 @@ async def fs_edit(file: str, start_line: int, end_line: int, new_content: str) -
     p = _safe_path(file)
     if not p.exists():
         return f"File not found: {file}"
-    if _is_binary(str(p)):
-        return "Cannot edit binary file"
     try:
-        content = p.read_text(encoding='utf-8')
-    except Exception as e:
+        content, meta = textio.read_text(p)
+    except OSError as e:
         return f"Error reading file: {e}"
+    if meta.get("binary"):
+        return "Cannot edit binary file (use fs_repair_encoding if it is text in another encoding)"
     lines_list = content.split('\n')
     if start_line < 1:
         start_line = 1
@@ -616,17 +609,36 @@ async def fs_edit(file: str, start_line: int, end_line: int, new_content: str) -
         return f"Invalid range: {start_line}-{end_line}"
     new_lines = new_content.split('\n')
     result = lines_list[:start_line - 1] + new_lines + lines_list[end_line:]
-    p.write_text('\n'.join(result), encoding='utf-8')
+    textio.write_text(p, '\n'.join(result))
     return f"Edited {file}: replaced lines {start_line}-{end_line} ({len(new_lines)} lines inserted)"
 
 
 async def fs_append(file: str, content: str) -> str:
     """Append text to end of file."""
     p = _safe_path(file)
-    p.parent.mkdir(parents=True, exist_ok=True)
+    if p.parent and not p.parent.exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, 'a', encoding='utf-8') as f:
         f.write(content)
     return f"Appended to {file}"
+
+
+async def fs_repair_encoding(file: str, encoding: str = "") -> str:
+    """Rewrite a text file as valid UTF-8 (backs up to ``<file>.bak``).
+
+    Use when a guide/file is refused as "binary" or read with mojibake: detects
+    the encoding (UTF-8 / cp1251 / charset_normalizer), re-encodes to UTF-8 and
+    leaves a ``.bak`` copy of the original bytes. ``encoding`` forces a source
+    encoding (e.g. ``cp1251``).
+    """
+    p = _safe_path(file)
+    if not p.exists():
+        return f"File not found: {file}"
+    try:
+        info = textio.repair_encoding(p, encoding=encoding)
+    except OSError as e:
+        return f"Error repairing file: {e}"
+    return json.dumps(info, ensure_ascii=False, indent=2)
 
 
 async def fs_read_docx(file: str, max_chars: int = 20000) -> str:
@@ -664,12 +676,14 @@ TOOL_DEFINITIONS = [
             "ascii_mode": {"type": "boolean", "description": "Use ASCII characters for tree"},
         },
     }),
-    ("fs_read", fs_read, "Read file content with binary detection and size-aware truncation", {
+    ("fs_read", fs_read, "Read file content with binary detection and size-aware truncation "
+     "(lenient UTF-8; Cyrillic/cp1251 text is read fine)", {
         "type": "object",
         "properties": {
             "file": {"type": "string", "description": "File path"},
-            "lines": {"type": "integer", "description": "Number of lines (default 30, max 80)"},
+            "lines": {"type": "integer", "description": "Number of lines (default 30, max 500)"},
             "start": {"type": "integer", "description": "Starting line (1-indexed)"},
+            "force_text": {"type": "boolean", "description": "Bypass binary detection (default: false)"},
         },
         "required": ["file"],
     }),
@@ -678,6 +692,7 @@ TOOL_DEFINITIONS = [
         "properties": {
             "file": {"type": "string", "description": "File path"},
             "lines": {"type": "integer", "description": "Number of lines to read from the end (default: 10, max: 200)"},
+            "force_text": {"type": "boolean", "description": "Bypass binary detection (default: false)"},
         },
         "required": ["file"],
     }),
@@ -781,6 +796,16 @@ TOOL_DEFINITIONS = [
         "properties": {
             "file": {"type": "string", "description": "Path to the .docx file"},
             "max_chars": {"type": "integer", "description": "Max characters to return (default: 20000)"},
+        },
+        "required": ["file"],
+    }),
+    ("fs_repair_encoding", fs_repair_encoding,
+     "Rewrite a text file as valid UTF-8 (backs up to <file>.bak). Use when a "
+     "file is refused as binary or reads as mojibake; detects UTF-8/cp1251.", {
+        "type": "object",
+        "properties": {
+            "file": {"type": "string", "description": "File path"},
+            "encoding": {"type": "string", "description": "Force source encoding (e.g. cp1251); default auto-detect"},
         },
         "required": ["file"],
     }),

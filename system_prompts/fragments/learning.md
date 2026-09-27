@@ -23,9 +23,13 @@ what they do.
 - If a profile/guide is returned, read it and follow it — the runtime
   auto-injects the matched state and resolves named controls to live ids.
 - If not, run **`discover_app(hwnd=...)`**: it deterministically snapshots the
-  window and writes `<key>.profile.json` (**trigger, state detect rules, named
-  controls, footprint**) plus a starting `<key>.md` — no guesswork, no blind
-  clicking. Then:
+  window (UIA + OCR) and derives **trigger, state detect rules, named controls,
+  footprint** — no guesswork, no blind clicking. It **always returns the derived
+  profile** (also with `save=false`, so you can review it first), and `save=true`
+  **merges additively** into an existing profile (a matching `detect` refreshes
+  its footprint; otherwise a new state is appended) so a curated multi-state
+  profile is never replaced by one state. It also writes a starting `<key>.md`
+  when none exists. Then:
   1. review/rename the controls, and add purposes you can infer from names;
   2. use `vision_look` / `screen_probe(action="hover")` only for purposes the
      names do not reveal (hover is a safe BEFORE/AFTER diff, no state change);
@@ -151,7 +155,12 @@ workflow; scheduled checks are handled by the heartbeat mechanism.
 
 ### Rules
 - Before a task, check for a matching workflow/guide and load it into context.
+- **Edit guides with `guide_upsert(app, section, content, mode)`**, not with
+  `fs_*`: it changes one `## section` and preserves every other section and the
+  managed `PROLIGHT:STATES` block, so a partial edit can never truncate the file.
+  `note_fact` is the append-only shortcut. Use `save_interaction_guide` only to
+  create a guide from scratch.
 - When a stored guide or workflow turns out to be wrong, correct the file
-  immediately (`save_interaction_guide`/`save_workflow`/`note_fact`) and tell the user.
+  immediately (`guide_upsert`/`save_workflow`/`note_fact`) and tell the user.
 - Never invent facts about an app. If unsure, observe, ask (`ask_user`), or test
   with `screen_probe`.

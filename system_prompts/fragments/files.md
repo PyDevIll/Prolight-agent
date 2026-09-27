@@ -1,8 +1,10 @@
 # FILE EDITING (fs_* / edit tools)
 
 - **Read before you edit.** `fs_read` (size-aware, binary detection); search with `fs_grep` / `fs_find`; inspect with `fs_stat` / `fs_tail`; browse with `fs_tree`. `fs_json_query(path, expr)` queries JSON/JSONL with a dotted path + optional `| key=value` filter (use it to inspect profiles).
+- **UTF-8 / Cyrillic is fully supported.** Reads are lenient: a stray non-UTF-8 byte (e.g. a cp1251 quote in a UTF-8 guide) never makes a file unreadable or un-editable, and all writes are UTF-8. If a file is still refused as binary or reads as mojibake, use `fs_repair_encoding(file)` — it detects the encoding (UTF-8/cp1251), rewrites it as UTF-8 and keeps a `<file>.bak` backup. `fs_read`/`fs_tail` and the edit tools also take `force_text=true` to bypass detection.
 - `fs_grep` reports `engine=regex|literal` and `scanned_bytes`; if a pattern contains regex metacharacters (`|`, `()`, `*`…) but `regex=false`, it is searched **literally** and the result says so — pass `regex=true` to use them.
 - **Preview before applying.** Use `fs_aedit` (anchored edit), `fs_edit_blocks` or `fs_edit_diff` with `dry_run=true`, check the result, then re-run with `dry_run=false`. All of these accept `file`; `fs_edit_blocks` also takes a filename header inside `blocks`. `fs_edit_blocks` reports `Applied N/M (K failed)` + `changed: true|false` — a failed SEARCH is not counted as applied.
 - `fs_edit_diff` applies a unified diff; `fs_write_file` overwrites a file.
+- **For interaction guides, do NOT hand-edit with `fs_*`** — use `guide_upsert(app, section, content, mode)` (see the LEARNING fragment). It changes one `## section` and preserves the rest of the guide and the managed STATES block, so a partial edit cannot truncate the file.
 - Manipulate with `fs_mkdir` / `fs_touch` / `fs_rm` / `fs_mv` / `fs_cp`. `fs_read_docx` extracts Word text.
 - Stay inside the project unless the user asks otherwise; never delete or overwrite user data without confirmation.
