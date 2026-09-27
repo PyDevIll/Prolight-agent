@@ -122,6 +122,29 @@ class WindowState:
         """Sorted set of element ``stable_key``s in this snapshot."""
         return sorted({e.stable_key() for e in self.all_elements()})
 
+    def active_url(self) -> str:
+        """Best-effort URL of this window's active browser tab (R24).
+
+        Reads the Chromium omnibox Edits ``value`` when renderer accessibility
+        exposes it (``automation_id`` ending ``view_1012`` / name like
+        'Адресная строка') or any control whose value is an explicit URL. Returns
+        ``""`` when unavailable (e.g. accessibility off) — callers must treat that
+        as *unknown*, not as *no match*.
+        """
+        for c in self.controls:
+            val = (c.value or "").strip()
+            if not val:
+                continue
+            aid = (c.automation_id or "").lower()
+            name = (c.name or "").lower()
+            is_omnibox = (aid.endswith("view_1012") or "omnibox" in aid or "address" in aid
+                          or "адресная" in name or "адрес" in name)
+            if "://" in val:
+                return val
+            if is_omnibox and "." in val and " " not in val:
+                return val
+        return ""
+
     def footprint(self, with_rects: bool = False) -> dict:
         """A deterministic signature of this state.
 
@@ -214,6 +237,12 @@ def get(label: str = "") -> Optional[WindowState]:
 def resolve_id(element_id: str, label: str = "") -> Optional[Element]:
     st = get(label)
     return st.find(element_id) if st else None
+
+
+def active_url(label: str = "") -> str:
+    """URL of the most recent snapshot's active tab (or "") — see ``WindowState.active_url``."""
+    st = get(label)
+    return st.active_url() if st is not None else ""
 
 
 # в”Ђв”Ђ helpers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ

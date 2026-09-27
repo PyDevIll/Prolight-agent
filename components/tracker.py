@@ -284,7 +284,8 @@ def _capture_once(session: dict, loop, action: str) -> None:
     except Exception as e:
         logger.warning(f"tracker: capture failed for {hwnd}: {e}")
         return
-    key = learning_db.resolve_app_key(hwnd=hwnd, title=fg["title"], process=fg["process"])
+    key = learning_db.resolve_app_key(hwnd=hwnd, title=fg["title"], process=fg["process"],
+                                      url=state.active_url())
     _emit_state(session, state, key, action, stability)
 
 

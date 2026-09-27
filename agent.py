@@ -160,7 +160,8 @@ class Agent:
                 return
             win = state.window or {}
             found = profiles.find_profile(
-                hwnd=state.hwnd, title=win.get("title", ""), process=win.get("process", ""))
+                hwnd=state.hwnd, title=win.get("title", ""), process=win.get("process", ""),
+                url=state.active_url())
             if not found:
                 return
             key, prof = found

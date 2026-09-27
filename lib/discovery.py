@@ -234,7 +234,7 @@ async def discover_app(
     if not hwnd:
         return {"ok": False, "error": "no window (foreground unknown)"}
     if not name:
-        res = learning_db.resolve_guide(hwnd=hwnd)
+        res = learning_db.resolve_guide(hwnd=hwnd, url=window_state.active_url())
         name = res.get("key") or "unnamed"
 
     state = await window_state.capture_state(

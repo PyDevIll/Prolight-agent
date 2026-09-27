@@ -49,10 +49,32 @@ def title_segments(title: str) -> list[str]:
     return [p.strip() for p in _TITLE_SPLIT.split(title or "") if p.strip()]
 
 
+_TLD = {"com", "ru", "org", "net", "io", "co", "en", "su", "ua", "by", "kz",
+        "info", "biz", "dev", "app", "me", "tv", "рф", "online", "site", "tech"}
+
+
+def _host_labels(url: str) -> list[str]:
+    """Host labels of a URL, most-specific (right) first, TLD/www dropped."""
+    if not url:
+        return []
+    m = re.search(r"://([^/?#]+)", url) or re.match(r"([^/?#]+)", url)
+    host = (m.group(1) if m else url).lower()
+    host = re.sub(r":\d+$", "", host).strip(".")
+    labels = [l for l in host.split(".") if l and l not in ("www",)]
+    return [l for l in reversed(labels) if l not in _TLD]
+
+
+def _host_primary(url: str) -> str:
+    """The second-level label of a URL: web.max.ru → max, www.google.com → google."""
+    labels = _host_labels(url)
+    return labels[0] if labels else ""
+
+
 def guide_candidates(
-    hwnd: Optional[int] = None, name: str = "", title: str = "", process: str = ""
+    hwnd: Optional[int] = None, name: str = "", title: str = "", process: str = "",
+    url: str = "",
 ) -> list[str]:
-    """Ordered guide keys for a window: name → title tail → title head → process."""
+    """Ordered guide keys for a window: name → title tail → title head → host → process."""
     cands: list[str] = []
 
     def add(value: str) -> None:
@@ -73,20 +95,26 @@ def guide_candidates(
         add(segments[-1])          # tail: the app name ("... - Microsoft Excel")
         if len(segments) > 1:
             add(segments[0])       # head: the document/page name (web apps)
+    if url:
+        # Host-derived keys so a per-web-app profile is reachable in one browser
+        # window (R25): full host then its labels ("max" for web.max.ru).
+        add(_host_primary(url))
+        add(url if "://" not in url else url.split("://", 1)[1])
     if process:
         add(process)
     return cands
 
 
 def resolve_guide(
-    hwnd: Optional[int] = None, name: str = "", title: str = "", process: str = ""
+    hwnd: Optional[int] = None, name: str = "", title: str = "", process: str = "",
+    url: str = "",
 ) -> dict:
     """Return the guide to use for a window.
 
     ``found`` is True when a file already exists; otherwise ``key``/``path``
     point at where a new guide should be written (process name by default).
     """
-    cands = guide_candidates(hwnd=hwnd, name=name, title=title, process=process)
+    cands = guide_candidates(hwnd=hwnd, name=name, title=title, process=process, url=url)
     for key in cands:
         path = GUIDES_DIR / f"{key}.md"
         if path.exists():
@@ -111,16 +139,16 @@ def _usable_title_segment(s: str) -> bool:
     return any(c.isalnum() for c in s)
 
 
-def resolve_app_key(hwnd: Optional[int] = None, title: str = "", process: str = "") -> str:
+def resolve_app_key(hwnd: Optional[int] = None, title: str = "", process: str = "",
+                    url: str = "") -> str:
     """Best guide key for the app in a window — the create/extend target.
 
     Resolution: an **existing** guide/profile for any candidate wins; otherwise a
-    browser's page/app is identified by the **title head**
-    (``"Telegram - Google Chrome"`` → ``telegram``) and a native app by the
+    browser's page/app is identified by the **tab host** (``web.max.ru`` →
+    ``max``) when a URL is available, else the title head, and a native app by the
     **title tail** (``"Book1 - Microsoft Excel"`` → ``microsoft excel``); else the
     process name. Path/URL-like or over-long title segments are rejected so a
-    shell title such as ``MINGW64:/c/Users/...`` never becomes a key. (Alias
-    canonicalization is a later refinement.)
+    shell title such as ``MINGW64:/c/Users/...`` never becomes a key.
     """
     if hwnd and (not title or not process):
         h = int(hwnd)
@@ -128,14 +156,19 @@ def resolve_app_key(hwnd: Optional[int] = None, title: str = "", process: str = 
             title = winapi.get_window_text(h) or ""
         if not process:
             process = winapi.get_process_name(winapi.get_window_pid(h)) or ""
-    cands = guide_candidates(hwnd=hwnd, title=title, process=process)
+    cands = guide_candidates(hwnd=hwnd, title=title, process=process, url=url)
     for key in cands:
         if (GUIDES_DIR / f"{key}.md").exists() or (GUIDES_DIR / f"{key}.profile.json").exists():
             return key
     segs = [s for s in title_segments(title) if _usable_title_segment(s)]
     proc = normalize_key(process)
-    if any(b in proc for b in _BROWSER_PROCS) and segs:
-        return normalize_key(segs[0])[:48]
+    if any(b in proc for b in _BROWSER_PROCS):
+        if url:
+            hp = _host_primary(url)
+            if hp:
+                return hp[:48]
+        if segs:
+            return normalize_key(segs[0])[:48]
     if segs:
         return normalize_key(segs[-1])[:48]
     return (proc or (cands[-1] if cands else "unnamed"))[:48]

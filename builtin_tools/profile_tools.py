@@ -42,7 +42,9 @@ async def load_app_profile(
         name: explicit profile key (e.g. "telegram").
         title / process: override the window title / process name.
     """
-    cands = learning_db.guide_candidates(hwnd=hwnd, name=name, title=title, process=process)
+    from lib import window_state
+    cands = learning_db.guide_candidates(hwnd=hwnd, name=name, title=title, process=process,
+                                         url=window_state.active_url())
     for key in cands:
         prof = profiles.load(key)
         if prof is not None:
@@ -98,7 +100,8 @@ async def route_app_state() -> str:
         return _dump({"ok": False, "error": "no snapshot — call win_snapshot first"})
     win = state.window or {}
     found = profiles.find_profile(
-        hwnd=state.hwnd, title=win.get("title", ""), process=win.get("process", ""))
+        hwnd=state.hwnd, title=win.get("title", ""), process=win.get("process", ""),
+        url=state.active_url())
     if not found:
         return _dump({"ok": True, "matched": False,
                       "hint": "no profile for this window (load_app_profile / save_app_profile)"})
@@ -117,7 +120,8 @@ async def resolve_app_control(name: str) -> str:
         return _dump({"ok": False, "error": "no snapshot — call win_snapshot first"})
     win = state.window or {}
     found = profiles.find_profile(
-        hwnd=state.hwnd, title=win.get("title", ""), process=win.get("process", ""))
+        hwnd=state.hwnd, title=win.get("title", ""), process=win.get("process", ""),
+        url=state.active_url())
     if not found:
         return _dump({"ok": False, "error": "no profile for this window"})
     key, prof = found
@@ -168,7 +172,8 @@ async def execute_app_control(name: str, action: str = "click", hwnd: int = None
         return _dump({"ok": False, "error": "no snapshot — call win_snapshot first"})
     win = state.window or {}
     found = profiles.find_profile(
-        hwnd=state.hwnd, title=win.get("title", ""), process=win.get("process", ""))
+        hwnd=state.hwnd, title=win.get("title", ""), process=win.get("process", ""),
+        url=state.active_url())
     if not found:
         return _dump({"ok": False, "error": "no profile for this window"})
     key, prof = found
@@ -461,8 +466,9 @@ TOOL_DEFINITIONS = [
         "route_app_state",
         route_app_state,
         "Run the deterministic router on the latest win_snapshot: returns the "
-        "matched app state, resolved named controls with live ids, and the "
-        "fragment that would be injected.",
+        "matched app state (most-specific rule wins), resolved named controls with "
+        "live ids, also_matched (runner-up states) and rejections (why the other "
+        "states failed), and the fragment that would be injected.",
         {"type": "object", "properties": {}, "required": []},
     ),
     (

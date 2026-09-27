@@ -58,18 +58,26 @@ def _spec_specificity(spec: dict) -> float:
 
 
 # ── state detection ───────────────────────────────────────────────────────
-def _state_score(detect: dict, state) -> Optional[int]:
-    """Return a match score (higher = more specific) or None when it fails."""
+def _state_score(detect: dict, state, explain: bool = False):
+    """Match score (higher = more specific) or None when it fails.
+
+    With ``explain=True`` returns ``(score_or_None, reason)`` so the reason a
+    state was rejected can be reported (R28).
+    """
     if not detect:
-        return None
-    score = 0
+        return (None, "no detect rules") if explain else None
+
+    def ret(score, reason):
+        return (score, reason) if explain else score
+
+    score = 0.0
     ocr = _blob([t.name for t in state.texts])
     uia = [c.to_dict() for c in state.controls]
     menu = _blob([m.name for m in state.menu])
 
     for needle in detect.get("ocr_all") or []:
         if _norm(needle) not in ocr:
-            return None
+            return ret(None, f"ocr_all {needle!r} not found")
         score += 2
     for needle in detect.get("ocr_any") or []:
         if _norm(needle) in ocr:
@@ -77,7 +85,7 @@ def _state_score(detect: dict, state) -> Optional[int]:
             break
     else:
         if detect.get("ocr_any"):
-            return None
+            return ret(None, "no ocr_any needle matched")
 
     uia_any = detect.get("uia_any") or []
     if uia_any:
@@ -86,25 +94,38 @@ def _state_score(detect: dict, state) -> Optional[int]:
             if any(_control_matches(c, spec) for c in uia):
                 best = max(best or 0.0, _spec_specificity(spec))
         if best is None:
-            return None
+            return ret(None, "no uia_any spec matched")
         score += 2 + best
 
     # uia_all: every spec must be present (used to tell apart same-layout states
     # that differ only by a control's label, e.g. a connect/connected toggle).
     for spec in detect.get("uia_all") or []:
         if not any(_control_matches(c, spec) for c in uia):
-            return None
+            return ret(None, f"uia_all {spec.get('name') or spec.get('automation_id')!r} not found")
         score += 2 + _spec_specificity(spec)
 
     for needle in detect.get("menu_all") or []:
         if _norm(needle) not in menu:
-            return None
+            return ret(None, f"menu_all {needle!r} not found")
         score += 1
 
     min_controls = detect.get("min_controls")
-    if min_controls is not None and len(state.controls) < int(min_controls):
-        return None
-    return score
+    if min_controls is not None and _min_controls_applicable(state) \
+            and len(state.controls) < int(min_controls):
+        return ret(None, f"min_controls={min_controls}, controls={len(state.controls)}")
+    return ret(score, "matched")
+
+
+def _min_controls_applicable(state) -> bool:
+    """Whether ``min_controls`` can be judged for this state (R28).
+
+    On an a11y-less Chromium page the UIA tree is empty (``coverage`` empty/n/a,
+    0 controls), so a ``min_controls`` guard would disable the state for a reason
+    that has nothing to do with the layout — skip it there.
+    """
+    if state.controls:
+        return True
+    return (state.uia_coverage or "").lower() not in ("empty", "n/a", "")
 
 
 def rank_states(profile: dict, state) -> list:
@@ -139,39 +160,59 @@ def _find_control(state, spec: dict):
     return None
 
 
+def _coord_center(spec: dict):
+    """A coordinate control's centre from ``click`` / ``center`` / ``x``+``y`` (R27)."""
+    c = spec.get("click") or spec.get("center")
+    if isinstance(c, (list, tuple)) and len(c) >= 2:
+        return [int(c[0]), int(c[1])]
+    x, y = spec.get("x"), spec.get("y")
+    if x is not None and y is not None:
+        return [int(x), int(y)]
+    return None
+
+
 def resolve_controls(state_def: dict, state) -> dict:
     """Map ``logical name -> {id, kind, key, rect, name, value}`` for this snapshot."""
     out = {}
     for name, spec in (state_def.get("controls") or {}).items():
         spec = spec.get("match", spec) if isinstance(spec, dict) else {}
-        el = _find_control(state, spec or {})
+        spec = spec or {}
+        el = _find_control(state, spec)
         if el is not None:
             out[name] = {
                 "id": el.id, "kind": el.kind, "key": el.stable_key(),
                 "rect": el.rect, "name": el.name, "value": el.value,
                 "center": el.center(),
             }
-        elif spec.get("click"):
-            out[name] = {"id": None, "kind": "coords", "key": None,
-                         "rect": None, "name": name, "value": "",
-                         "center": list(spec["click"])}
+        else:
+            cen = _coord_center(spec)
+            if cen:
+                out[name] = {"id": None, "kind": "coords", "key": None,
+                             "rect": None, "name": name, "value": "", "center": cen}
     return out
 
 
 def resolve_named(profile: dict, state, name: str) -> Optional[dict]:
-    """Resolve one logical control name against the profile's states."""
+    """Resolve one logical control name against the profile's states.
+
+    Accepts both the canonical ``{"match": {...}}`` spec and a bare spec, and a
+    coordinate control written as ``{"match": {"click": [x, y]}}``, ``{"click":
+    ...}``, ``{"center": ...}`` or ``{"x":…, "y":…}`` (R27).
+    """
     for st in profile.get("states") or []:
         ctrls = st.get("controls") or {}
-        if name in ctrls:
-            spec = ctrls[name]
-            spec = spec.get("match", spec) if isinstance(spec, dict) else {}
-            el = _find_control(state, spec or {})
-            if el is not None:
-                return {"id": el.id, "kind": el.kind, "key": el.stable_key(),
-                        "rect": el.rect, "center": el.center(), "name": el.name}
-            if isinstance(ctrls[name], dict) and ctrls[name].get("click"):
-                return {"id": None, "kind": "coords", "center": list(ctrls[name]["click"]),
-                        "name": name}
+        if name not in ctrls:
+            continue
+        raw = ctrls[name]
+        spec = raw.get("match", raw) if isinstance(raw, dict) else {}
+        spec = spec or {}
+        el = _find_control(state, spec)
+        if el is not None:
+            return {"id": el.id, "kind": el.kind, "key": el.stable_key(),
+                    "rect": el.rect, "center": el.center(), "name": el.name}
+        cen = _coord_center(spec)
+        if cen:
+            return {"id": None, "kind": "coords", "center": cen, "name": name}
     return None
 
 
@@ -229,6 +270,12 @@ def route(profile: dict, state, key: str = "") -> dict:
     state_id = (state_def or {}).get("id")
     controls = resolve_controls(state_def, state) if state_def else {}
     fp = _verify_footprint(profile, state_id, state)
+    # Why the other states did NOT match (so a wrong/absent state_id is diagnosable).
+    rejections = []
+    for st in profile.get("states") or []:
+        sc, reason = _state_score(st.get("detect") or {}, state, explain=True)
+        if sc is None and st is not state_def:
+            rejections.append({"id": st.get("id"), "reason": reason})
 
     groups = set()
     if state_def:
@@ -238,6 +285,7 @@ def route(profile: dict, state, key: str = "") -> dict:
         "display": profile.get("display", key),
         "state_id": state_id,
         "also_matched": [st.get("id") for _, st in ranked[1:]],
+        "rejections": rejections,
         "text": (state_def or {}).get("text") or profile.get("initial_text", ""),
         "controls": controls,
         "tool_groups": groups,
@@ -247,12 +295,16 @@ def route(profile: dict, state, key: str = "") -> dict:
 
 def volatile_text(result: dict, profile: Optional[dict] = None) -> str:
     """Build the short fragment injected for the current route."""
-    if not result.get("state_id") and not result.get("text"):
+    if not result.get("state_id") and not result.get("text") and not result.get("rejections"):
         return ""
     head = f"## CURRENT APP: {result.get('display') or result.get('profile_key')}"
     if result.get("state_id"):
         head += f" — state: {result['state_id']}"
     lines = [head]
+    rej = result.get("rejections") or []
+    if rej and not result.get("state_id"):
+        lines.append("no state matched; rejected: "
+                     + "; ".join(f"{r.get('id')}: {r.get('reason')}" for r in rej[:4]))
     if result.get("text"):
         lines.append(str(result["text"]).strip())
     if result.get("also_matched"):

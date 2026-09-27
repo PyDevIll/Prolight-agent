@@ -85,6 +85,10 @@ def validate(data: dict) -> list[str]:
     trig = data.get("trigger")
     if trig is not None and not isinstance(trig, dict):
         problems.append("trigger must be an object")
+    if isinstance(trig, dict) and (trig.get("url_contains") or trig.get("url_regex")):
+        problems.append("trigger.url_contains/url_regex needs a runtime URL (Chromium omnibox); "
+                        "it is ignored when no URL is available — add a process/title check or "
+                        "also_matches")
     states = data.get("states")
     if states is not None:
         if not isinstance(states, list):
@@ -197,13 +201,32 @@ def match_trigger(profile: dict, *, title: str = "", process: str = "", url: str
     if titles:
         checks.append(_any_sub(title, titles))
     urls = trig.get("url_contains")
-    if urls:
+    # A url constraint with no runtime URL is IGNORED (R24), never forced to fail
+    # (otherwise it silently disables the profile).
+    if urls and url:
         checks.append(_any_sub(url, urls))
+    uregex = trig.get("url_regex")
+    if uregex and url:
+        checks.append(any(re.search(rg, url, re.I) for rg in uregex))
     regexes = trig.get("title_regex")
     if regexes:
         checks.append(any(re.search(rg, title or "", re.I) for rg in regexes))
     # No constraints → matches anything (a catch-all profile).
     return all(checks) if checks else True
+
+
+def also_matches(profile: dict, *, title: str = "", process: str = "", url: str = "") -> bool:
+    """Alias match (R25): does ``also_matches`` claim this window/app?
+
+    Lets one profile per web app (keyed ``max``) match its tab host
+    (``web.max.ru``) or a title substring, even though the process is just
+    ``chrome``.
+    """
+    aliases = [str(a) for a in (profile.get("also_matches") or []) if str(a).strip()]
+    if not aliases:
+        return False
+    blobs = [(title or "").lower(), (url or "").lower(), (process or "").lower()]
+    return any(a.lower() in b for a in aliases for b in blobs)
 
 
 def find_profile(
@@ -219,11 +242,19 @@ def find_profile(
             title = winapi.get_window_text(h) or ""
         if not process:
             process = winapi.get_process_name(winapi.get_window_pid(h)) or ""
-    cands = learning_db.guide_candidates(hwnd=hwnd, name=name, title=title, process=process)
+    cands = learning_db.guide_candidates(hwnd=hwnd, name=name, title=title,
+                                         process=process, url=url)
     for key in cands:
         prof = load(key)
         if prof is not None:
             if match_trigger(prof, title=title, process=process, url=url):
                 return key, prof
             # A profile exists but the trigger rejects this window; keep looking.
+    # Alias fallback (R25): a profile whose `also_matches` claims this window.
+    for item in list_profiles():
+        if item["key"] in cands:
+            continue
+        prof = load(item["key"])
+        if prof is not None and also_matches(prof, title=title, process=process, url=url):
+            return item["key"], prof
     return None

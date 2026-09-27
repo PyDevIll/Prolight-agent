@@ -56,6 +56,29 @@ match and resolved control ids; `resolve_app_control(name)` resolves one name;
 When a state matches, the relevant fragment and control ids appear automatically
 in your context — act on them directly.
 
+### Router semantics (how `detect` rules match)
+- `ocr_*` needles match by **substring** (case-insensitive); `ocr_all` scores 2
+  per needle (all required), `ocr_any` scores 1 (first match, at least one
+  required). `uia_all`/`uia_any` work the same, scored 2 + a **specificity**
+  bonus (a longer matching name/id wins).
+- The **most specific** matching state wins; if several match, `route_app_state`
+  lists the others in `also_matched`. When nothing matches, `rejections` says why
+  each state failed (e.g. `min_controls=1, controls=0`, `ocr_all '…' not found`).
+- `min_controls` is **ignored** when the accessibility tree is empty/unavailable
+  (an a11y-off Chromium page) — so it cannot disable a state for the wrong reason.
+- Trigger checks are **ANDed**. Candidate keys are: title tail → title head →
+  **tab host** (`web.max.ru` → `max`) → process name; a profile may also declare
+  `also_matches` aliases. `trigger.url_contains` is **ignored** when no URL is
+  available (never silently disables) — prefer `process`/`also_matches`.
+- OCR is **lossy** in a predictable way (`Сообщение` → `Рообщение`): use
+  unambiguous substring needles (avoid easily-confused letters), or make the
+  control a coordinate control `{"match": {"click": [x, y]}}` (accepted forms:
+  `click`, `center`, `x`+`y`, with or without the `match` wrapper).
+- The router/runner snapshot's OCR scope is capped (`max_text`/`max_controls`); a
+  `run_workflow_step` result reports it under `snapshot` so you can spot the blind
+  zone. Bottom-of-window elements may fall outside it — raise the caps or use a
+  coordinate control.
+
 ### Workflows — `workflows/<task>.md` (CROSS-APP)
 A repeatable procedure that **switches between several apps** to reach a goal
 (e.g. "process an incoming invoice request"). A workflow records the **apps in
