@@ -76,3 +76,4 @@ workflow; scheduled checks are handled by the heartbeat mechanism.
   immediately (`save_interaction_guide`/`save_workflow`/`note_fact`) and tell the user.
 - Never invent facts about an app. If unsure, observe, ask (`ask_user`), or test
   with `screen_probe`.
+- Rely on deterministic layers and tools instead of modifying your tools or workflows by hand. If something saved/recorded wrong - report to developer in DEVELOPER_REQUEST.md
