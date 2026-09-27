@@ -89,9 +89,17 @@ in your context — act on them directly.
   `run_workflow_step` result reports it under `snapshot` so you can spot the blind
   zone. Bottom-of-window elements may fall outside it — raise the caps or use a
   coordinate control.
+- **Freshness:** `route_app_state`/`resolve_app_control`/`execute_app_control`/
+  `validate_profile` reuse the **last** snapshot by default. Right after
+  navigation, or after a transient overlay appears (context menu, confirm dialog,
+  composer), the last snapshot may predate it → a false `matched:false`. Pass
+  **`fresh=true`** to re-capture the target window now with a tall OCR scope
+  (`max_text`, default 200) so bottom-of-window UI is visible to `detect`. The
+  response reports `snapshot.age_s` and, on no match, a hint when the snapshot is
+  stale.
 - When debugging a non-matching `detect`, `route_app_state` returns `ocr_scope`
-  (the OCR lines it actually saw, with rects) alongside `rejections`, so you can
-  fix the needles without guessing.
+  (the OCR lines it actually saw, with rects), `ocr_total`/`ocr_shown`, and
+  `rejections`, so you can fix the needles without guessing.
 
 ### Workflows — `workflows/<task>.md` (CROSS-APP)
 A repeatable procedure that **switches between several apps** to reach a goal

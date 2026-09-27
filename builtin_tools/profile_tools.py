@@ -28,6 +28,10 @@ def _dump(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2, default=str)
 
 
+_ROUTE_MAX_TEXT = 200  # OCR lines a routing snapshot keeps (covers a 1080p window)
+_STALE_S = 1.5         # a routing snapshot older than this is likely stale
+
+
 async def load_app_profile(
     hwnd: int = None, name: str = "", title: str = "", process: str = ""
 ) -> str:
@@ -258,6 +262,50 @@ def _ocr_scope(state, limit: int = 40) -> list:
     return out
 
 
+def _snapshot_info(state) -> dict:
+    """Age/identity of the snapshot the router is about to use (staleness diagnostics)."""
+    import time
+    win = state.window or {}
+    return {
+        "id": state.snapshot_id,
+        "age_s": round(max(0.0, time.time() - (state.created or 0)), 2),
+        "hwnd": state.hwnd,
+        "foreground": win.get("foreground"),
+        "max_text": state.max_text,
+    }
+
+
+def _stale_note(snap: dict) -> str:
+    """A hint telling the agent how to recover from a stale/short routing snapshot."""
+    age = snap.get("age_s", 0) or 0
+    if age > _STALE_S:
+        return (f"snapshot {snap.get('id')} is {age}s old — the UI may have changed "
+                "(a menu/dialog may not be in it); re-run route_app_state(fresh=true) "
+                "or win_snapshot, then route again")
+    return ("if the UI just changed (navigation/overlay), re-run with fresh=true or "
+            "win_snapshot so the snapshot includes it")
+
+
+async def _fresh_capture(hwnd=None, max_text: int = _ROUTE_MAX_TEXT):
+    """Re-capture the routed window now (stable ids via the last snapshot as baseline).
+
+    Keeps a tall OCR scope (``max_text``) so bottom-of-window UI (menus, dialogs,
+    composers) is visible to ``detect``. Stores the new state so later calls reuse it.
+    """
+    from lib import window_state
+    prev = window_state.get()
+    target = int(hwnd) if hwnd is not None else (
+        prev.hwnd if (prev is not None and prev.window) else None)
+    try:
+        state = await window_state.capture_state(
+            hwnd=target, max_text=int(max_text or _ROUTE_MAX_TEXT), baseline=prev)
+    except Exception as e:
+        logger.warning(f"fresh route capture failed: {e}")
+        return None
+    window_state.store(state)
+    return state
+
+
 def _route_profile(state, app: str = ""):
     """Pick the profile for ``state``: explicit ``app`` key, else the router's pick.
 
@@ -281,46 +329,75 @@ def _route_profile(state, app: str = ""):
     return prof, "", key
 
 
-async def route_app_state(app: str = "") -> str:
-    """Run the deterministic router on the latest ``win_snapshot``.
+async def route_app_state(app: str = "", fresh: bool = False,
+                          max_text: int = _ROUTE_MAX_TEXT, hwnd: int = None) -> str:
+    """Run the deterministic router on the current (or a fresh) window snapshot.
 
     Returns the matched app/state, resolved named controls (with live ids), the
     fragment the agent would inject, and (for debugging ``detect``) the OCR
-    lines it saw under ``ocr_scope``. Call ``win_snapshot`` first.
+    lines it saw under ``ocr_scope`` plus the snapshot's age. Call
+    ``win_snapshot`` first — or pass ``fresh=true`` to capture now (needed right
+    after navigation or after a menu/dialog/composer appears, since the router
+    only sees the *last* snapshot otherwise).
 
     Args:
         app: optional profile key to route **explicitly** (e.g. ``"max"``) instead
             of auto-selecting — used when several profiles share one browser
             process and the page URL is not available to the router.
+        fresh: re-capture the target window now before routing (default false:
+            reuse the last snapshot). A fresh capture keeps a tall OCR scope
+            (``max_text``) so bottom-of-window UI is visible to ``detect``.
+        max_text: OCR line cap for a ``fresh`` capture (default 200).
+        hwnd: window to capture when ``fresh`` (default: the last snapshot's window,
+            else the foreground).
     """
     from lib import window_state
+    if fresh:
+        await _fresh_capture(hwnd, max_text)
     state = window_state.get()
     if state is None or not state.window:
-        return _dump({"ok": False, "error": "no snapshot — call win_snapshot first"})
+        return _dump({"ok": False, "error": "no snapshot — call win_snapshot first "
+                                            "(or pass fresh=true)"})
     prof, err, key = _route_profile(state, app)
     scope = _ocr_scope(state)
+    snap = _snapshot_info(state)
+    base = {"ok": True, "ocr_scope": scope, "ocr_total": len(state.texts or []),
+            "ocr_shown": len(scope), "snapshot": snap}
     if prof is None:
-        return _dump({"ok": True, "matched": False, "ocr_scope": scope,
-                      "available": [p["key"] for p in profiles.list_profiles()],
-                      "hint": err})
+        base.update({"matched": False,
+                     "available": [p["key"] for p in profiles.list_profiles()],
+                     "hint": f"{err}; {_stale_note(snap)}"})
+        return _dump(base)
     result = router.route(prof, state, key)
-    return _dump({"ok": True, "matched": bool(result.get("state_id")), "profile": key,
-                  "route": result, "ocr_scope": scope,
-                  "volatile": router.volatile_text(result, prof)})
+    matched = bool(result.get("state_id"))
+    out = {**base, "matched": matched, "profile": key, "route": result,
+           "volatile": router.volatile_text(result, prof)}
+    if not matched:
+        rej = result.get("rejections") or []
+        out["hint"] = (f"no state matched — {_stale_note(snap)}; "
+                       f"check the detect rules against ocr_scope (rejections: {rej})")
+    return _dump(out)
 
 
-async def resolve_app_control(name: str, app: str = "") -> str:
+async def resolve_app_control(name: str, app: str = "", fresh: bool = False,
+                              max_text: int = _ROUTE_MAX_TEXT, hwnd: int = None) -> str:
     """Resolve one logical control name (from the current profile state) to its
-    live element id / screen centre on the latest snapshot.
+    live element id / screen centre on the current snapshot.
 
     Args:
         name: logical control name.
         app: optional profile key to use explicitly (default: the routed profile).
+        fresh: re-capture the target window now (default false).
+        max_text: OCR line cap for a ``fresh`` capture (default 200).
+        hwnd: window to capture when ``fresh``.
     """
     from lib import window_state
+    if fresh:
+        await _fresh_capture(hwnd, max_text)
     state = window_state.get()
     if state is None or not state.window:
-        return _dump({"ok": False, "error": "no snapshot — call win_snapshot first"})
+        return _dump({"ok": False, "error": "no snapshot — call win_snapshot first "
+                                            "(or pass fresh=true)"})
     prof, err, key = _route_profile(state, app)
     if prof is None:
         return _dump({"ok": False, "error": err,
@@ -361,24 +438,31 @@ async def discover_app(
 
 
 async def execute_app_control(name: str, action: str = "click", hwnd: int = None,
-                              app: str = "") -> str:
+                              app: str = "", fresh: bool = False,
+                              max_text: int = _ROUTE_MAX_TEXT) -> str:
     """Deterministically act on a profile's named control (no LLM).
 
-    Resolves ``name`` against the current profile state and the latest snapshot,
-    then performs ``action``: click | double_click | right_click | hotkey | focus.
+    Resolves ``name`` against the current profile state and the current (or a
+    fresh) snapshot, then performs ``action``: click | double_click | right_click
+    | hotkey | focus.
 
     Args:
         name: logical control name from the current profile state.
         action: the action to perform.
         hwnd: target window (default: the snapshot's window).
         app: optional profile key to use explicitly (default: the routed profile).
+        fresh: re-capture the target window now before resolving (default false).
+        max_text: OCR line cap for a ``fresh`` capture (default 200).
     """
     from lib import window_state
     from builtin_tools import uia_tools, mouse_tools, keybd_tools, win_tools
 
+    if fresh:
+        await _fresh_capture(hwnd, max_text)
     state = window_state.get()
     if state is None or not state.window:
-        return _dump({"ok": False, "error": "no snapshot — call win_snapshot first"})
+        return _dump({"ok": False, "error": "no snapshot — call win_snapshot first "
+                                            "(or pass fresh=true)"})
     prof, err, key = _route_profile(state, app)
     if prof is None:
         return _dump({"ok": False, "error": err,
@@ -416,13 +500,20 @@ async def execute_app_control(name: str, action: str = "click", hwnd: int = None
     return _dump({"ok": False, "error": f"unknown action {action!r}"})
 
 
-async def validate_profile(name: str = "") -> str:
-    """Validate one profile (JSON + a routing self-test on the latest snapshot).
+async def validate_profile(name: str = "", fresh: bool = False,
+                           max_text: int = _ROUTE_MAX_TEXT, hwnd: int = None) -> str:
+    """Validate one profile (JSON + a routing self-test on the current snapshot).
 
     With no ``name``, validates every profile and reports problems per key.
 
     Args:
         name: profile key to validate (default: all profiles).
+        fresh: re-capture the target window before the routing self-test
+            (default false: test against the last snapshot). Pass true to test
+            the profile against what is on screen *now* (right after navigation
+            or an overlay), with a tall OCR scope (``max_text``).
+        max_text: OCR line cap for a ``fresh`` capture (default 200).
+        hwnd: window to capture when ``fresh``.
     """
     if name:
         prof, err = profiles.load_with_error(name)
@@ -438,9 +529,12 @@ async def validate_profile(name: str = "") -> str:
                "guide_stale": profiles.guide_stale(prof),
                "states": [s.get("id") for s in (prof.get("states") or []) if isinstance(s, dict)]}
         from lib import window_state
+        if fresh:
+            await _fresh_capture(hwnd, max_text)
         st = window_state.get()
         if st is not None and st.window:
             res = router.route(prof, st, prof.get("key", ""))
+            out["snapshot"] = _snapshot_info(st)
             out["route"] = {
                 "state_id": res.get("state_id"),
                 "footprint_ok": res.get("footprint_ok"),
@@ -449,6 +543,8 @@ async def validate_profile(name: str = "") -> str:
                 "layout_changed": res.get("layout_changed"),
                 "resolved_controls": sorted((res.get("controls") or {}).keys()),
             }
+            if not res.get("state_id"):
+                out["hint"] = _stale_note(out["snapshot"])
         else:
             out["route"] = None
         return _dump(out)
@@ -682,15 +778,21 @@ TOOL_DEFINITIONS = [
     (
         "route_app_state",
         route_app_state,
-        "Run the deterministic router on the latest win_snapshot: returns the "
-        "matched app state (most-specific rule wins), resolved named controls with "
-        "live ids, also_matched (runner-up states) and rejections (why the other "
-        "states failed), and the fragment that would be injected. Pass `app` to "
-        "route a specific profile explicitly (e.g. a web app inside Chrome).",
+        "Run the deterministic router on the current (or a fresh) window "
+        "snapshot: returns the matched app state (most-specific rule wins), "
+        "resolved named controls with live ids, also_matched (runner-up states), "
+        "rejections (why the other states failed), the fragment that would be "
+        "injected, and the snapshot age. Pass `app` to route a specific profile "
+        "explicitly (e.g. a web app inside Chrome). Pass `fresh=true` to capture "
+        "now — needed right after navigation or after a menu/dialog appears, since "
+        "the router only sees the last snapshot otherwise.",
         {
             "type": "object",
             "properties": {
                 "app": {"type": "string", "description": "Optional profile key to route explicitly (e.g. 'max'), overriding auto-selection"},
+                "fresh": {"type": "boolean", "description": "Re-capture the target window now before routing (default false; keeps a tall OCR scope so bottom-of-window UI is visible)"},
+                "max_text": {"type": "integer", "description": "OCR line cap for a fresh capture (default 200)"},
+                "hwnd": {"type": "integer", "description": "Window to capture when fresh (default: last snapshot's window, else foreground)"},
             },
             "required": [],
         },
@@ -699,12 +801,16 @@ TOOL_DEFINITIONS = [
         "resolve_app_control",
         resolve_app_control,
         "Resolve one logical control name from the current profile state to its "
-        "live element id / screen centre. Pass `app` to use a specific profile.",
+        "live element id / screen centre. Pass `app` to use a specific profile; "
+        "`fresh=true` to re-capture first.",
         {
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Logical control name"},
                 "app": {"type": "string", "description": "Optional profile key to use explicitly"},
+                "fresh": {"type": "boolean", "description": "Re-capture the target window now (default false)"},
+                "max_text": {"type": "integer", "description": "OCR line cap for a fresh capture (default 200)"},
+                "hwnd": {"type": "integer", "description": "Window to capture when fresh"},
             },
             "required": ["name"],
         },
@@ -735,7 +841,8 @@ TOOL_DEFINITIONS = [
         execute_app_control,
         "Deterministically act on a profile's named control (no LLM): resolves "
         "the name against the current state and snapshot, then clicks / "
-        "double-clicks / right-clicks / sends its hotkey / focuses the window.",
+        "double-clicks / right-clicks / sends its hotkey / focuses the window. "
+        "Pass `fresh=true` to re-capture first (right after navigation/overlay).",
         {
             "type": "object",
             "properties": {
@@ -743,6 +850,8 @@ TOOL_DEFINITIONS = [
                 "action": {"type": "string", "description": "click | double_click | right_click | hotkey | focus"},
                 "hwnd": {"type": "integer", "description": "Target window (default: the snapshot's window)"},
                 "app": {"type": "string", "description": "Optional profile key to use explicitly (e.g. 'max')"},
+                "fresh": {"type": "boolean", "description": "Re-capture the target window now (default false)"},
+                "max_text": {"type": "integer", "description": "OCR line cap for a fresh capture (default 200)"},
             },
             "required": ["name"],
         },
@@ -806,11 +915,17 @@ TOOL_DEFINITIONS = [
         "validate_profile",
         validate_profile,
         "Validate a profile: JSON/schema problems plus a routing self-test against "
-        "the latest win_snapshot (matched state, footprint ok/moved, resolved "
-        "controls). With no name, validates every profile.",
+        "the current (or a fresh) snapshot (matched state, footprint ok/moved, "
+        "resolved controls). With no name, validates every profile. Pass "
+        "`fresh=true` to test against what is on screen now.",
         {
             "type": "object",
-            "properties": {"name": {"type": "string", "description": "Profile key (default: all)"}},
+            "properties": {
+                "name": {"type": "string", "description": "Profile key (default: all)"},
+                "fresh": {"type": "boolean", "description": "Re-capture the target window before the self-test (default false)"},
+                "max_text": {"type": "integer", "description": "OCR line cap for a fresh capture (default 200)"},
+                "hwnd": {"type": "integer", "description": "Window to capture when fresh"},
+            },
             "required": [],
         },
     ),
