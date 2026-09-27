@@ -2,7 +2,7 @@
 
 - **Read before you edit.** `fs_read` (size-aware, binary detection); search with `fs_grep` / `fs_find`; inspect with `fs_stat` / `fs_tail`; browse with `fs_tree`. `fs_json_query(path, expr)` queries JSON/JSONL with a dotted path + optional `| key=value` filter (use it to inspect profiles).
 - `fs_grep` reports `engine=regex|literal` and `scanned_bytes`; if a pattern contains regex metacharacters (`|`, `()`, `*`…) but `regex=false`, it is searched **literally** and the result says so — pass `regex=true` to use them.
-- **Preview before applying.** Use `fs_aedit` (anchored edit) or `fs_edit_blocks` with `dry_run=true`, check the result, then re-run with `dry_run=false`.
+- **Preview before applying.** Use `fs_aedit` (anchored edit), `fs_edit_blocks` or `fs_edit_diff` with `dry_run=true`, check the result, then re-run with `dry_run=false`. All of these accept `file`; `fs_edit_blocks` also takes a filename header inside `blocks`. `fs_edit_blocks` reports `Applied N/M (K failed)` + `changed: true|false` — a failed SEARCH is not counted as applied.
 - `fs_edit_diff` applies a unified diff; `fs_write_file` overwrites a file.
 - Manipulate with `fs_mkdir` / `fs_touch` / `fs_rm` / `fs_mv` / `fs_cp`. `fs_read_docx` extracts Word text.
 - Stay inside the project unless the user asks otherwise; never delete or overwrite user data without confirmation.

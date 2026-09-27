@@ -47,6 +47,16 @@ def _control_matches(d: dict, spec: dict) -> bool:
     return all(checks) if checks else False
 
 
+def _spec_specificity(spec: dict) -> float:
+    """How specific a matching spec is (longer names/ids = more specific).
+
+    Used so a state whose Pane name is ``(2715) YouTube - …`` outranks one whose
+    name is the substring ``YouTube - …`` (R14: the more specific rule wins).
+    """
+    s = spec.get("name") or spec.get("automation_id") or ""
+    return min(3.0, len(_norm(s)) / 12.0)
+
+
 # ── state detection ───────────────────────────────────────────────────────
 def _state_score(detect: dict, state) -> Optional[int]:
     """Return a match score (higher = more specific) or None when it fails."""
@@ -71,16 +81,20 @@ def _state_score(detect: dict, state) -> Optional[int]:
 
     uia_any = detect.get("uia_any") or []
     if uia_any:
-        if not any(_control_matches(c, spec) for c in uia for spec in uia_any):
+        best = None
+        for spec in uia_any:
+            if any(_control_matches(c, spec) for c in uia):
+                best = max(best or 0.0, _spec_specificity(spec))
+        if best is None:
             return None
-        score += 2
+        score += 2 + best
 
     # uia_all: every spec must be present (used to tell apart same-layout states
     # that differ only by a control's label, e.g. a connect/connected toggle).
     for spec in detect.get("uia_all") or []:
         if not any(_control_matches(c, spec) for c in uia):
             return None
-        score += 2
+        score += 2 + _spec_specificity(spec)
 
     for needle in detect.get("menu_all") or []:
         if _norm(needle) not in menu:
@@ -93,14 +107,21 @@ def _state_score(detect: dict, state) -> Optional[int]:
     return score
 
 
-def detect_state(profile: dict, state) -> Optional[dict]:
-    """Return the best-matching state dict, or None."""
-    best, best_score = None, -1
+def rank_states(profile: dict, state) -> list:
+    """All matching states sorted most-specific-first (``[(score, state_def)]``)."""
+    ranked = []
     for st in profile.get("states") or []:
         sc = _state_score(st.get("detect") or {}, state)
-        if sc is not None and sc > best_score:
-            best, best_score = st, sc
-    return best
+        if sc is not None:
+            ranked.append((sc, st))
+    ranked.sort(key=lambda t: t[0], reverse=True)
+    return ranked
+
+
+def detect_state(profile: dict, state) -> Optional[dict]:
+    """Return the best-matching (most specific) state dict, or None."""
+    ranked = rank_states(profile, state)
+    return ranked[0][1] if ranked else None
 
 
 # ── named-control resolution ──────────────────────────────────────────────
@@ -164,10 +185,14 @@ def _verify_footprint(profile: dict, state_id: Optional[str], state) -> dict:
     fps = (profile.get("footprints") or {}).get(state_id or "") or {}
     stored = fps.get("keys") or []
     if not stored:
-        return {"footprint_ok": None, "missing_keys": [], "moved_keys": [], "layout_changed": None}
+        return {"footprint_ok": None, "footprint_ratio": None, "footprint_missing": 0,
+                "missing_keys": [], "moved_keys": [], "layout_changed": None}
     current = set(state.stable_keys())
     missing = [k for k in stored if k not in current]
-    ok = len(missing) <= max(1, len(stored) // 2)
+    # Consistent with missing_keys: a missing key means the footprint does NOT
+    # fully match (R14). footprint_ratio gives the graded view.
+    ok = len(missing) == 0
+    ratio = (len(stored) - len(missing)) / len(stored) if stored else 1.0
 
     moved: list = []
     layout_changed = None
@@ -192,13 +217,15 @@ def _verify_footprint(profile: dict, state_id: Optional[str], state) -> dict:
                     moved.append(k)
         if present:
             layout_changed = len(moved) >= max(1, present // 2)
-    return {"footprint_ok": ok, "missing_keys": missing,
+    return {"footprint_ok": ok, "footprint_ratio": round(ratio, 3),
+            "footprint_missing": len(missing), "missing_keys": missing,
             "moved_keys": moved, "layout_changed": layout_changed}
 
 
 # ── route + injection text ────────────────────────────────────────────────
 def route(profile: dict, state, key: str = "") -> dict:
-    state_def = detect_state(profile, state)
+    ranked = rank_states(profile, state)
+    state_def = ranked[0][1] if ranked else None
     state_id = (state_def or {}).get("id")
     controls = resolve_controls(state_def, state) if state_def else {}
     fp = _verify_footprint(profile, state_id, state)
@@ -210,6 +237,7 @@ def route(profile: dict, state, key: str = "") -> dict:
         "profile_key": key or profile.get("key", ""),
         "display": profile.get("display", key),
         "state_id": state_id,
+        "also_matched": [st.get("id") for _, st in ranked[1:]],
         "text": (state_def or {}).get("text") or profile.get("initial_text", ""),
         "controls": controls,
         "tool_groups": groups,
@@ -227,6 +255,9 @@ def volatile_text(result: dict, profile: Optional[dict] = None) -> str:
     lines = [head]
     if result.get("text"):
         lines.append(str(result["text"]).strip())
+    if result.get("also_matched"):
+        lines.append("\n⚠ other states also match: " + ", ".join(result["also_matched"][:4])
+                     + " — overlapping rules; verify which actually applies before acting.")
     controls = result.get("controls") or {}
     if controls:
         lines.append("\n**Named controls (ids are valid for the latest snapshot):**")

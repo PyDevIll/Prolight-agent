@@ -750,6 +750,7 @@ async def fs_edit_blocks(
     blocks: str,
     dry_run: bool = False,
     fuzzy: bool = True,
+    file: str = "",
 ) -> str:
     """Parse and apply multiple SEARCH/REPLACE blocks from LLM output.
 
@@ -767,9 +768,12 @@ async def fs_edit_blocks(
         blocks: String containing one or more SEARCH/REPLACE blocks
         dry_run: If true, return what would be changed without writing
         fuzzy: Enable fuzzy matching
+        file: Target file — like the sibling edit tools (``fs_edit``/``fs_aedit``).
+            When given and the blocks carry no filename header, it is applied to
+            every block.
 
     Returns:
-        Summary of all edit operations.
+        Summary of all edit operations, with a ``changed`` flag.
     """
     edits = find_edit_blocks(blocks)
 
@@ -778,6 +782,9 @@ async def fs_edit_blocks(
                 "Use format:\n"
                 "  path/to/file\n"
                 "  <<<<<<< SEARCH\n  old_code\n  =======\n  new_code\n  >>>>>>> REPLACE")
+
+    if file and all(not fname for fname, _, _ in edits):
+        edits = [(file, search_text, replace_text) for _, search_text, replace_text in edits]
 
     results = []
     succeeded = 0
@@ -797,16 +804,20 @@ async def fs_edit_blocks(
             fuzzy=fuzzy,
         )
 
-        if result.startswith("ERROR"):
-            failed += 1
-        else:
+        # A match failure is not an "ERROR" string — check both, otherwise a
+        # failed block was miscounted as applied (R18).
+        ok = not (result.startswith("ERROR") or result.startswith("SEARCH block failed"))
+        if ok:
             succeeded += 1
+        else:
+            failed += 1
         results.append(f"  {fname}: {result}")
 
-    header = f"Applied {succeeded}/{len(edits)} edit blocks"
+    changed = succeeded > 0 and not dry_run
+    header = f"Applied {succeeded}/{len(edits)} edit blocks ({failed} failed)"
     if dry_run:
         header = "[DRY RUN] " + header
-    return header + "\n" + "\n".join(results)
+    return header + f"\nchanged: {str(changed).lower()}\n" + "\n".join(results)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1131,6 +1142,7 @@ TOOL_DEFINITIONS = [
         "type": "object",
         "properties": {
             "blocks": {"type": "string", "description": "String with SEARCH/REPLACE blocks (filename + <<<<<<< SEARCH / ======= / >>>>>>> REPLACE)"},
+            "file": {"type": "string", "description": "Target file (used when blocks carry no filename header)"},
             "dry_run": {"type": "boolean", "description": "Preview changes without writing (default: false)"},
             "fuzzy": {"type": "boolean", "description": "Enable fuzzy matching (default: true)"},
         },

@@ -43,16 +43,29 @@ The runner **stops and hands the step back** with the live `result`
    `save_workflow_program(...)` and record the gotcha in `<task>.md`.
 
 ### Creating / refining a program
-- `summarize_learning_session(label=...)` writes an auto **draft** program
-  `workflows/_draft_<label>.workflow.json` (plus the prose draft). Review it,
-  rename unresolved controls, then `save_workflow_program(name="<task>", ...)`.
+- `summarize_learning_session(label=...)` writes auto **drafts** under `data/tmp/`
+  (`_draft_<label>.md` + `_draft_<label>.workflow.json` — never in `workflows/`).
+  Review them, rename unresolved controls, then `save_workflow_program(name="<task>", ...)`.
 - Read an existing one with `load_workflow_program(name)`; `validate_program`
   problems are returned on save/load.
+- `start_workflow(name)` refuses a `_draft_*` program unless `allow_draft=true`.
 - `workflow_reset()` forgets the current run (the program file is untouched).
+
+### Network-disruptive workflows (e.g. a VPN)
+- A program that toggles a VPN carries `network_disruptive: true`. `start_workflow`
+  then returns `requires_confirmation: true` and does **not** start — tell the user
+  first, then call `start_workflow(name, confirm=true)`.
+- If the connection drops mid-run, the run file (`data/workflow_run.json`) is kept:
+  check `workflow_status()` and call `run_workflow_step()` again to resume.
+- A click step may carry `skip_if_state`: if the app is already in that state the
+  step is **skipped** — this avoids re-clicking a connect/connect toggle from the
+  top and disconnecting. Never remove it from a toggle step.
 
 ### Rules
 - Run steps **in order**; do not skip. A guard `state` mismatch means the app is
   not where the workflow expects — resolve it (or ask the user), don't click blindly.
+- A step with no live window returns `needs_llm: true` + `needs_app`/`hint` — restore
+  or launch the app yourself, then resume (`run_workflow_step`).
 - Respect toggles: a control whose label changes (`Подключиться`→`Подключено`) is
   a different state — check the state before clicking so you never toggle twice.
 - Confirm with `ask_user` before destructive/irreversible steps the workflow marks

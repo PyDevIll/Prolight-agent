@@ -57,6 +57,10 @@ def list_programs() -> list[dict]:
             "path": str(p),
             "draft": p.name.startswith("_draft_"),
         })
+    drafts_dir = ROOT / "data" / "tmp"
+    if drafts_dir.exists():
+        for p in sorted(drafts_dir.glob("_draft_*.workflow.json")):
+            out.append({"key": p.name[: -len(".workflow.json")], "path": str(p), "draft": True})
     return out
 
 
@@ -69,15 +73,22 @@ def load_program(name: str) -> Optional[dict]:
     p = Path(name)
     if p.suffix == ".json" or p.exists():
         cands.append(p)
+    raw = str(name).strip()
     key = learning_db.normalize_key(name)
-    cands += [
-        learning_db.WORKFLOWS_DIR / f"{key}.workflow.json",
-        learning_db.WORKFLOWS_DIR / f"_draft_{key}.workflow.json",
-    ]
+    drafts_dir = ROOT / "data" / "tmp"
+    for base in (raw, key, f"_draft_{raw}", f"_draft_{key}"):
+        fn = f"{base}.workflow.json"
+        cands += [learning_db.WORKFLOWS_DIR / fn, drafts_dir / fn]
+    seen = set()
     for c in cands:
+        if c in seen:
+            continue
+        seen.add(c)
         if c.exists():
             try:
-                return json.loads(c.read_text(encoding="utf-8"))
+                program = json.loads(c.read_text(encoding="utf-8"))
+                program.setdefault("_draft", c.name.startswith("_draft_"))
+                return program
             except Exception as e:
                 logger.error(f"workflow_runner: cannot parse {c.name}: {e}")
                 return None
@@ -177,16 +188,33 @@ def _json(s):
         return {"ok": False, "error": str(s)[:300], "raw": str(s)[:300]}
 
 
-def find_app_window(program: dict, app: str) -> Optional[int]:
-    """Find a live top-level window for an app (program hint → profile trigger)."""
+def _app_process(program: dict, app: str) -> str:
+    """The process/module name to look for (program hint → profile trigger)."""
     hint = (program.get("windows") or {}).get(app) or {}
     proc = (hint.get("process") or "").lower()
     if not proc:
         prof = profiles.load(app)
         procs = ((prof or {}).get("trigger") or {}).get("process") or []
         proc = (procs[0] if procs else "").lower()
-    if proc.endswith(".exe"):
-        proc = proc[:-4]
+    return proc[:-4] if proc.endswith(".exe") else proc
+
+
+def _process_running(proc: str) -> Optional[bool]:
+    """True/False whether any visible window's process matches; None if unknown."""
+    if not proc:
+        return None
+    for w in winapi.list_windows(visible_only=True, titled_only=False):
+        wp = (w.get("process") or "").lower()
+        if wp.endswith(".exe"):
+            wp = wp[:-4]
+        if proc in wp:
+            return True
+    return False
+
+
+def find_app_window(program: dict, app: str) -> Optional[int]:
+    """Find a live top-level window for an app (program hint → profile trigger)."""
+    proc = _app_process(program, app)
     fallback = None
     for w in winapi.list_windows(visible_only=True, titled_only=False):
         wp = (w.get("process") or "").lower()
@@ -231,7 +259,17 @@ async def _exec(program: dict, step: dict) -> tuple[dict, bool]:
 
     hwnd = find_app_window(program, app)
     if not hwnd:
-        return _needs(step, {"ok": False, "error": f"no live window for app {app!r}"}), False
+        # A missing window is exactly the case that needs the agent (R11): the app
+        # may be closed, or hidden in the tray/overflow. Hand it back with a hint.
+        proc = _app_process(program, app)
+        running = _process_running(proc)
+        hint = ("the app process is not running — launch it, then call run_workflow_step again"
+                if running is False else
+                f"no visible window for {app!r} (process {proc or '?'}): it may be minimized or "
+                "hidden in the tray/notification overflow — restore it, then resume")
+        return _needs(step, {"ok": False, "error": f"no live window for app {app!r}",
+                             "needs_app": app, "process": proc, "running": running,
+                             "hint": hint}), True
 
     if action == "focus":
         from builtin_tools import win_tools
@@ -265,6 +303,15 @@ async def _exec(program: dict, step: dict) -> tuple[dict, bool]:
 
     state = await _capture(hwnd)
     routed = router.route(profile, state, app) if profile else {"state_id": None, "controls": {}}
+    # Toggle guard (R13): never re-click when the app is already in the result
+    # state — re-running a connect toggle from the top would disconnect it. This
+    # is checked BEFORE the guard mismatch so an already-satisfied toggle is a
+    # clean skip, not a state mismatch.
+    skip = step.get("skip_if_state")
+    if skip and routed.get("state_id") == skip:
+        return _needs(step, {"ok": True, "skipped": True, "state_id": skip,
+                             "reason": f"already in target state {skip!r} — step skipped"}, hwnd), False
+
     expected = step.get("state")
     if expected and routed.get("state_id") != expected:
         return _needs(step, {"ok": False,
@@ -338,15 +385,41 @@ async def _exec(program: dict, step: dict) -> tuple[dict, bool]:
 
 
 # ── public API ────────────────────────────────────────────────────────────
-def start(name: str, from_step: str = "") -> dict:
-    """Load a program and (re)start a run at the first step (or ``from_step``)."""
+def start(name: str, from_step: str = "", confirm: bool = False,
+          allow_draft: bool = False) -> dict:
+    """Load a program and (re)start a run at the first step (or ``from_step``).
+
+    A draft program (``_draft_*``) is refused unless ``allow_draft``. A
+    network-disruptive program (e.g. a VPN toggle) is not started until
+    ``confirm=True`` (R13) — the caller warns the user first.
+    """
     program = load_program(name)
     if not program:
         return {"ok": False, "error": f"no workflow program {name!r}",
                 "available": list_programs()}
+    if program.get("_draft") and not allow_draft:
+        return {"ok": False, "draft": True, "key": program.get("key"),
+                "error": f"{name!r} is a draft (_draft_*) — refine it and "
+                         "save_workflow_program, or pass allow_draft=true to run it as-is"}
     steps = program.get("steps") or []
     if not steps:
         return {"ok": False, "error": "program has no steps", "key": program.get("key")}
+
+    def _preview():
+        return [{"id": s.get("id"), "app": s.get("app"), "action": s.get("action"),
+                 "state": s.get("state"), "control": s.get("control"),
+                 "skip_if_state": s.get("skip_if_state"),
+                 "unresolved": bool(s.get("unresolved"))} for s in steps]
+
+    if program.get("network_disruptive") and not confirm:
+        return {"ok": True, "started": False, "requires_confirmation": True,
+                "network_disruptive": True, "key": program.get("key"),
+                "warning": ("This workflow changes the network path (VPN) — starting it can "
+                            "drop the agent's own LLM connection. Tell the user, then call "
+                            "start_workflow again with confirm=true. Progress is kept in "
+                            "data/workflow_run.json, so the run can be resumed after an outage."),
+                "apps": program.get("apps"), "steps": _preview()}
+
     index = 0
     if from_step:
         for i, s in enumerate(steps):
@@ -359,16 +432,16 @@ def start(name: str, from_step: str = "") -> dict:
     unresolved = [s.get("id") for s in steps if s.get("unresolved")]
     return {
         "ok": True,
+        "started": True,
         "key": run["key"],
         "total": len(steps),
         "index": index,
+        "network_disruptive": bool(program.get("network_disruptive")),
         "current_step": steps[index] if index < len(steps) else None,
         "unresolved_steps": unresolved,
         "apps": program.get("apps"),
         "problems": validate_program(program),
-        "steps": [{"id": s.get("id"), "app": s.get("app"), "action": s.get("action"),
-                   "state": s.get("state"), "control": s.get("control"),
-                   "unresolved": bool(s.get("unresolved"))} for s in steps],
+        "steps": _preview(),
     }
 
 
@@ -381,7 +454,7 @@ async def run_step(name: str = "") -> dict:
         if not name:
             return {"ok": False, "error": "no workflow run — call start_workflow(name) first"}
         started = start(name)
-        if not started.get("ok"):
+        if not started.get("ok") or not started.get("started"):
             return started
         run = load_run()
 
@@ -395,7 +468,14 @@ async def run_step(name: str = "") -> dict:
                 "total": len(steps), "message": "workflow complete"}
 
     step = steps[idx]
-    result, needs_llm = await _exec(program, step)
+    try:
+        result, needs_llm = await _exec(program, step)
+    except Exception as e:
+        # A dropped connection / transient failure: keep the run and let the agent
+        # retry (R13) — the run file already holds the current index.
+        result, needs_llm = ({"ok": False, "error": f"execution error: {e}",
+                              "hint": "transient/connectivity failure — the run is preserved; "
+                                      "retry run_workflow_step to resume"}, True)
     ok = bool(result.get("ok")) and not needs_llm
     run.setdefault("log", []).append({
         "id": step.get("id"), "action": step.get("action"),
@@ -412,10 +492,11 @@ async def run_step(name: str = "") -> dict:
         "step": step,
         "result": result,
         "needs_llm": bool(needs_llm),
+        "resumable": not ok,
         "done": run["index"] >= len(steps),
     }
     if needs_llm:
-        out["hint"] = (
+        out["hint"] = result.get("hint") or (
             f"Step {step.get('id')} ({step.get('action')} "
             f"{step.get('control') or ''}) did not resolve deterministically — "
             "take a win_snapshot, locate the element and perform the action yourself, "

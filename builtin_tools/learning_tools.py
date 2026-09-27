@@ -99,6 +99,16 @@ async def save_workflow(name: str, content: str) -> str:
     return _dump({"ok": True, "key": learning_db.normalize_key(name), "path": str(path)})
 
 
+async def list_links() -> str:
+    """Doctor-style check: find dangling ``workflows/…`` / ``interaction_guides/…`` links.
+
+    Scans every guide and workflow for references to other files and reports the
+    ones that do not exist (R22).
+    """
+    missing = learning_db.list_links()
+    return _dump({"ok": True, "count": len(missing), "dangling": missing})
+
+
 async def start_learning_session(label: str = "") -> str:
     """Start recording the user's real mouse/keyboard actions (learning mode).
 
@@ -285,6 +295,13 @@ TOOL_DEFINITIONS = [
         "Stop the learning recording and return the session summary (events, "
         "settled states, app segments) so you can summarize it into a workflow. "
         "Returns already_stopped:true + the last session if none is active.",
+        {"type": "object", "properties": {}, "required": []},
+    ),
+    (
+        "list_links",
+        list_links,
+        "Find dangling references between guides and workflows (a guide pointing "
+        "at a workflow that does not exist). Doctor-style check.",
         {"type": "object", "properties": {}, "required": []},
     ),
     (

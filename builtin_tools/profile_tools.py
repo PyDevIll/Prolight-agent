@@ -290,44 +290,135 @@ async def delete_profile(key: str, also_guide: bool = False) -> str:
     return _dump({"ok": bool(removed), "key": learning_db.normalize_key(key), "removed": removed})
 
 
-async def rename_profile_state(key: str, old: str, new: str) -> str:
-    """Rename a profile state id (and its footprint + guide block).
+async def rename_profile_state(key: str, old: str = "", new: str = "",
+                               renames: str = "") -> str:
+    """Rename one or more profile state ids (and their footprints + guide block).
 
-    Use this to give a state a clearer id (or to re-point one), instead of a
-    silent renumbering. Returns a ``renames`` map so workflows/guides can be
+    Accepts either ``old``/``new`` or a ``renames`` map (``{"state_3": "watch"}``
+    — a JSON string or object), so several ids can be re-pointed in one pass
+    (R17). Returns the applied ``renames`` map; workflows/guides can then be
     updated. The managed guide block is refreshed.
 
     Args:
         key: profile key.
-        old: current state id.
-        new: new state id.
+        old: current state id (single rename).
+        new: new state id (single rename).
+        renames: a ``{old: new}`` map for multiple renames (JSON string or object).
     """
     from lib import session_analysis
+    mapping: dict = {}
+    if renames:
+        try:
+            mapping = json.loads(renames) if isinstance(renames, str) else dict(renames)
+        except Exception as e:
+            return _dump({"ok": False, "error": f"invalid renames map: {e}"})
+    if old and new:
+        mapping[old] = new
+    if not mapping:
+        return _dump({"ok": False, "error": "provide old/new or a renames map"})
+
     prof = profiles.load(key)
     if prof is None:
         return _dump({"ok": False, "error": f"no profile {key!r}"})
-    new_id = learning_db.normalize_key(new).replace(" ", "_") or new
-    if any(s.get("id") == new_id for s in prof.get("states") or []):
-        return _dump({"ok": False, "error": f"state {new_id!r} already exists"})
-    hit = False
+    ids = [s.get("id") for s in prof.get("states") or []]
+    applied: dict = {}
+    result_ids = list(ids)
+    for o, n in mapping.items():
+        new_id = learning_db.normalize_key(n).replace(" ", "_") or n
+        if o not in ids:
+            return _dump({"ok": False, "error": f"no state {o!r}", "states": ids})
+        if new_id in result_ids and new_id != o:
+            return _dump({"ok": False, "error": f"state {new_id!r} already exists"})
+        result_ids = [new_id if i == o else i for i in result_ids]
+        applied[o] = new_id
     for s in prof.get("states") or []:
-        if s.get("id") == old:
-            s["id"] = new_id
-            hit = True
-    if not hit:
-        return _dump({"ok": False, "error": f"no state {old!r}",
-                      "states": [s.get("id") for s in prof.get("states") or []]})
+        if s.get("id") in applied:
+            s["id"] = applied[s["id"]]
     fps = prof.get("footprints") or {}
-    if old in fps:
-        fps[new_id] = fps.pop(old)
+    for o, n in applied.items():
+        if o in fps:
+            fps[n] = fps.pop(o)
     prof["guide_synced"] = {"ids_hash": profiles.states_hash(prof),
                             "states": [s.get("id") for s in prof.get("states") or []],
                             "updated": date.today().isoformat()}
     path = profiles.save(key, prof)
     gpath, gaction = session_analysis.sync_guide_block(key, prof)
-    logger.info(f"rename_profile_state: {key} {old!r} -> {new_id!r}")
-    return _dump({"ok": True, "key": key, "renames": {old: new_id}, "path": str(path),
+    logger.info(f"rename_profile_state: {key} {applied}")
+    return _dump({"ok": True, "key": key, "renames": applied, "path": str(path),
+                  "states": [s.get("id") for s in prof.get("states") or []],
                   "guide": {"path": gpath, "action": gaction}})
+
+
+async def delete_profile_state(key: str, id: str) -> str:
+    """Delete a state (and its footprint) from a profile; refresh the guide block.
+
+    Args:
+        key: profile key.
+        id: state id to remove.
+    """
+    from lib import session_analysis
+    prof = profiles.load(key)
+    if prof is None:
+        return _dump({"ok": False, "error": f"no profile {key!r}"})
+    ids = [s.get("id") for s in prof.get("states") or []]
+    if id not in ids:
+        return _dump({"ok": False, "error": f"no state {id!r}", "states": ids})
+    prof["states"] = [s for s in prof.get("states") if s.get("id") != id]
+    (prof.get("footprints") or {}).pop(id, None)
+    prof["guide_synced"] = {"ids_hash": profiles.states_hash(prof),
+                            "states": [s.get("id") for s in prof["states"]],
+                            "updated": date.today().isoformat()}
+    path = profiles.save(key, prof)
+    gpath, gaction = session_analysis.sync_guide_block(key, prof)
+    logger.info(f"delete_profile_state: {key} removed {id!r}")
+    return _dump({"ok": True, "key": key, "removed": id,
+                  "states": [s.get("id") for s in prof["states"]],
+                  "path": str(path), "guide": {"path": gpath, "action": gaction}})
+
+
+async def delete_profile_footprint(key: str, id: str) -> str:
+    """Delete one state's footprint from a profile (without removing the state).
+
+    Args:
+        key: profile key.
+        id: state id whose footprint to drop.
+    """
+    prof = profiles.load(key)
+    if prof is None:
+        return _dump({"ok": False, "error": f"no profile {key!r}"})
+    fps = prof.get("footprints") or {}
+    if id not in fps:
+        return _dump({"ok": False, "error": f"no footprint {id!r}", "footprints": list(fps)})
+    fps.pop(id)
+    path = profiles.save(key, prof)
+    return _dump({"ok": True, "key": key, "removed": id, "footprints": list(fps),
+                  "path": str(path)})
+
+
+async def sync_profile_guide(key: str) -> str:
+    """Regenerate the managed ``PROLIGHT:STATES`` block and the ``guide_synced`` hash.
+
+    Use it to clear ``guide_stale`` after a hand edit (R16): the hash is
+    ``sha1(','.join(sorted(state_ids)))[:12]`` and is recomputed here from the
+    profile, then the guide block is rewritten to match.
+
+    Args:
+        key: profile key.
+    """
+    from lib import session_analysis
+    prof = profiles.load(key)
+    if prof is None:
+        return _dump({"ok": False, "error": f"no profile {key!r}"})
+    prof["guide_synced"] = {"ids_hash": profiles.states_hash(prof),
+                            "states": [s.get("id") for s in prof.get("states") or []],
+                            "updated": date.today().isoformat()}
+    path = profiles.save(key, prof)
+    gpath, gaction = session_analysis.sync_guide_block(key, prof)
+    logger.info(f"sync_profile_guide: {key} -> {gaction}")
+    return _dump({"ok": True, "key": key, "profile_path": str(path),
+                  "guide": {"path": gpath, "action": gaction},
+                  "guide_stale": profiles.guide_stale(prof),
+                  "ids_hash": prof["guide_synced"]["ids_hash"]})
 
 
 GROUP = "learning"
@@ -422,17 +513,56 @@ TOOL_DEFINITIONS = [
     (
         "rename_profile_state",
         rename_profile_state,
-        "Rename a profile state id (and its footprint + guide block), returning a "
-        "renames map. Use it to give a state a clearer id instead of a silent "
-        "renumbering.",
+        "Rename one or more profile state ids (and their footprints + guide block). "
+        "Give old/new, or a renames map {old: new} to do several in one call. "
+        "Returns the applied renames map.",
         {
             "type": "object",
             "properties": {
                 "key": {"type": "string", "description": "Profile key"},
-                "old": {"type": "string", "description": "Current state id"},
-                "new": {"type": "string", "description": "New state id"},
+                "old": {"type": "string", "description": "Current state id (single rename)"},
+                "new": {"type": "string", "description": "New state id (single rename)"},
+                "renames": {"type": "string", "description": "JSON map {old: new} for multiple renames"},
             },
-            "required": ["key", "old", "new"],
+            "required": ["key"],
+        },
+    ),
+    (
+        "delete_profile_state",
+        delete_profile_state,
+        "Delete a state (and its footprint) from a profile and refresh the guide block.",
+        {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "Profile key"},
+                "id": {"type": "string", "description": "State id to remove"},
+            },
+            "required": ["key", "id"],
+        },
+    ),
+    (
+        "delete_profile_footprint",
+        delete_profile_footprint,
+        "Delete one state's footprint from a profile (keeping the state).",
+        {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "Profile key"},
+                "id": {"type": "string", "description": "State id whose footprint to drop"},
+            },
+            "required": ["key", "id"],
+        },
+    ),
+    (
+        "sync_profile_guide",
+        sync_profile_guide,
+        "Regenerate the managed PROLIGHT:STATES guide block and the guide_synced hash "
+        "from the profile — clears guide_stale after a hand edit. hash = "
+        "sha1(','.join(sorted(state_ids)))[:12].",
+        {
+            "type": "object",
+            "properties": {"key": {"type": "string", "description": "Profile key"}},
+            "required": ["key"],
         },
     ),
     (

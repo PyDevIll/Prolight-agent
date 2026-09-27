@@ -262,6 +262,21 @@ def _normspec(spec) -> tuple:
             (m.get("name", "") or "").lower(), m.get("ocr", ""))
 
 
+def _detect_sig(detect) -> str:
+    """Canonical signature of a detect rule (for exact-collision detection)."""
+    return json.dumps(detect or {}, sort_keys=True, ensure_ascii=False)
+
+
+# Apps whose automation changes the machine's network path (running a learned
+# workflow can drop the agent's own LLM connection — see R13).
+VPN_APPS = ("amneziavpn", "amnezia", "openvpn", "wireguard", "nordvpn", "protonvpn",
+            "expressvpn", "surfshark", "windscribe", "vpn")
+
+
+def is_network_disruptive(apps) -> bool:
+    return any(any(k in (a or "").lower() for k in VPN_APPS) for a in (apps or []))
+
+
 def _semantic_sid(d: dict, used: set) -> str:
     """A stable, meaningful state id (item 2).
 
@@ -294,6 +309,11 @@ def _semantic_sid(d: dict, used: set) -> str:
     return name
 
 
+def _md_cell(value) -> str:
+    """Escape a value for a Markdown table cell (pipes/backticks would break it)."""
+    return (str(value).replace("\\", "\\\\").replace("|", "\\|").replace("`", "\\`"))
+
+
 def render_states_block(profile: dict) -> str:
     """A compact managed table of the profile's states (for the guide block)."""
     lines = ["## Profile states (managed block — auto-generated, do not edit)", "",
@@ -303,9 +323,9 @@ def render_states_block(profile: dict) -> str:
         sig = []
         for rule in (det.get("uia_all") or []) + (det.get("uia_any") or []):
             sig.append(rule.get("name") or rule.get("automation_id") or "")
-        sig_s = ", ".join(x for x in sig[:3] if x)
-        ctrls = ", ".join(list((s.get("controls") or {}).keys())[:8])
-        lines.append(f"| `{s.get('id')}` | {sig_s} | {ctrls} |")
+        sig_s = ", ".join(_md_cell(x) for x in sig[:3] if x)
+        ctrls = ", ".join(_md_cell(x) for x in list((s.get("controls") or {}).keys())[:8])
+        lines.append(f"| `{_md_cell(s.get('id'))}` | {sig_s} | {ctrls} |")
     return "\n".join(lines)
 
 
@@ -328,13 +348,15 @@ def sync_guide_block(key: str, profile: dict) -> tuple:
         return None, "error"
 
 
-def merge_profile(key: str, derived: list, window: dict) -> dict:
+def merge_profile(key: str, derived: list, window: dict, dry_run: bool = False) -> dict:
     """Additively merge observed states into ``<key>.profile.json``.
 
     Returns a full **diff** of the mutation (item 1): ``mode`` (create/merge),
-    ``before``/``after`` (state count + file bytes), the id lists
+    ``applied``, ``before``/``after`` (state count + file bytes), the id lists
     ``states_added``/``states_refreshed``/``states_removed``, a ``renames`` map
     and the ``guide`` action — so nothing about the profile change is implicit.
+    With ``dry_run`` nothing is written (``applied: false``, ``would_add`` /
+    ``would_refresh`` previews) — used for ``save=false`` (R12).
     """
     before_path = profiles.profile_path(key)
     before_exists = before_path.exists()
@@ -362,9 +384,10 @@ def merge_profile(key: str, derived: list, window: dict) -> dict:
         wstate = d["_state"]
         match = None
         for ex in prof["states"]:
+            same_detect = _detect_sig(ex.get("detect")) == _detect_sig(d["detect"])
             ex_fp = prof["footprints"].get(ex.get("id"), {})
-            if router._state_score(ex.get("detect") or {}, wstate) is not None \
-                    and _footprint_similar(ex_fp, d["footprint"]) >= 0.6:
+            if same_detect or (router._state_score(ex.get("detect") or {}, wstate) is not None
+                               and _footprint_similar(ex_fp, d["footprint"]) >= 0.6):
                 match = ex
                 break
         if match is None:
@@ -395,32 +418,40 @@ def merge_profile(key: str, derived: list, window: dict) -> dict:
             capture_map[cid] = sid
 
     after_ids = [s.get("id") for s in prof["states"]]
+    removed_ids = [i for i in before_ids if i not in after_ids]
+    base = {
+        "key": key,
+        "mode": "create" if fresh else "merge",
+        "applied": not dry_run,
+        "before": {"exists": before_exists, "states": len(before_ids), "bytes": before_bytes},
+        "after": {"states": len(after_ids), "bytes": None},
+        "states_added": list(added_ids),
+        "states_refreshed": list(refreshed_ids),
+        "states_removed": removed_ids,
+        "would_add": list(added_ids),
+        "would_refresh": list(refreshed_ids),
+        "renames": {},
+        "controls_added": added_controls,
+        "guide": {"path": None, "action": "untouched"},
+        "capture_states": capture_map,
+    }
+    if dry_run:
+        return base
+
     prof["updated"] = date.today().isoformat()
     prof["guide_synced"] = {"ids_hash": profiles.states_hash(prof),
                             "states": after_ids, "updated": prof["updated"]}
     path = profiles.save(key, prof)
-
     guide_path = None
     guide_action = "untouched"
     try:
         guide_path, guide_action = sync_guide_block(key, prof)
     except Exception as e:
         logger.warning(f"session_analysis: could not sync guide for {key}: {e}")
-
-    return {
-        "key": key,
-        "mode": "create" if fresh else "merge",
-        "path": str(path),
-        "before": {"exists": before_exists, "states": len(before_ids), "bytes": before_bytes},
-        "after": {"states": len(after_ids), "bytes": path.stat().st_size},
-        "states_added": [i for i in added_ids],
-        "states_refreshed": [i for i in refreshed_ids],
-        "states_removed": [i for i in before_ids if i not in after_ids],
-        "renames": {},
-        "controls_added": added_controls,
-        "guide": {"path": guide_path, "action": guide_action},
-        "capture_states": capture_map,
-    }
+    base["path"] = str(path)
+    base["after"]["bytes"] = path.stat().st_size
+    base["guide"] = {"path": guide_path, "action": guide_action}
+    return base
 
 
 # ── workflow draft ────────────────────────────────────────────────────────
@@ -469,9 +500,15 @@ def _control_name(states: list, capture_id: str, clicked: dict) -> str:
     return clicked.get("name", "")
 
 
-def build_workflow(label: str, timeline: list, derived_by_key: dict, records_by_id: dict) -> str:
+def build_workflow(label: str, timeline: list, derived_by_key: dict, records_by_id: dict,
+                   capture_states: dict = None) -> str:
+    apps = [s.get("guide_key") for s in timeline if s.get("guide_key")]
     lines = [f"# Workflow: {label or 'learned task'}", "", "## Goal",
              "- (fill in: the outcome this session accomplished.)", "", "## Apps & order"]
+    if is_network_disruptive(apps):
+        lines += ["", "> ⚠ **NETWORK-DISRUPTIVE** — this workflow changes the network path "
+                  "(VPN); starting it can drop the agent's own LLM connection. Confirm with "
+                  "the user; the run can be resumed afterwards."]
     for i, seg in enumerate(timeline, 1):
         lines.append(f"{i}. `{seg.get('guide_key')}` — {seg.get('title') or ''} "
                      f"({seg.get('process') or ''})")
@@ -484,15 +521,15 @@ def build_workflow(label: str, timeline: list, derived_by_key: dict, records_by_
             rec = records_by_id.get(cid)
             if not rec:
                 continue
-            sid = _state_id_for(states, cid)
+            sid = (capture_states or {}).get(cid) or _state_id_for(states, cid)
             action = rec.get("action") or "action"
             clicked = rec.get("clicked") or {}
             cname = _control_name(states, cid, clicked)
             if action == "start":
                 lines.append(f"- [state `{sid}`] (initial layout)")
             elif action == "click":
-                label = cname or clicked.get("name") or "(unknown control — use OCR/vision)"
-                lines.append(f"- [state `{sid}`] click `{label}`")
+                cdisp = cname or clicked.get("name") or "(unknown control — use OCR/vision)"
+                lines.append(f"- [state `{sid}`] click `{cdisp}`")
             elif action == "key":
                 t = (rec.get("typed") or "").strip()
                 if t:
@@ -541,6 +578,7 @@ def build_workflow_program(label: str, timeline: list, derived_by_key: dict,
         kw.setdefault("app", "")
         steps.append(kw)
 
+    first_state: dict = {}
     for seg in timeline:
         app = seg.get("guide_key") or "unnamed"
         if app not in apps:
@@ -554,27 +592,34 @@ def build_workflow_program(label: str, timeline: list, derived_by_key: dict,
             if not rec:
                 continue
             sid = (capture_states or {}).get(cid) or _state_id_for(states, cid)
+            if sid and app not in first_state:
+                first_state[app] = sid
             action = rec.get("action") or "action"
             before = prev_state.get(app)
+            guard = before or first_state.get(app)
             if action == "start":
                 add(app=app, action="assert_state", state=sid)
             elif action == "click":
                 cname = _control_name(states, cid, rec.get("clicked") or {})
                 step = {"app": app, "action": "click"}
-                if before:
-                    step["state"] = before
+                if guard:
+                    step["state"] = guard
                 if cname:
                     step["control"] = cname
                 else:
                     step["control"] = ""
                     step["unresolved"] = True
                     step["expected"] = (rec.get("clicked") or {}).get("name", "")
+                if sid and sid != guard:
+                    # toggle guard: if the app is already in the result state, do
+                    # NOT click again (a second click on a toggle reverts it).
+                    step["skip_if_state"] = sid
                 add(**step)
             elif action == "key":
                 typed = (rec.get("typed") or "").strip()
                 step = {"app": app, "action": "type" if typed else "key"}
-                if before:
-                    step["state"] = before
+                if guard:
+                    step["state"] = guard
                 if typed:
                     step["text"] = typed
                 else:
@@ -584,8 +629,8 @@ def build_workflow_program(label: str, timeline: list, derived_by_key: dict,
                 add(app=app, action="focus")
             else:
                 step = {"app": app, "action": action}
-                if before:
-                    step["state"] = before
+                if guard:
+                    step["state"] = guard
                 add(**step)
             if action != "start" and sid and sid != before:
                 add(app=app, action="wait_state", state=sid, timeout_s=8)
@@ -605,6 +650,7 @@ def build_workflow_program(label: str, timeline: list, derived_by_key: dict,
         "source_session": str(session_dir or ""),
         "apps": apps,
         "windows": windows,
+        "network_disruptive": is_network_disruptive(apps),
         "preconditions": [],
         "steps": steps,
     }
@@ -621,7 +667,38 @@ def analyze_session(session_dir, label: str = "", save: bool = True,
     recs, timeline = read_session(session_dir)
     if not recs:
         return {"ok": False, "error": f"no states recorded in {session_dir}"}
+
+    # Drop the agent's own console/terminal from the recording (R19). The host
+    # process is recorded in session_meta.json at start; events are tagged too.
+    meta: dict = {}
+    mp = Path(session_dir) / "session_meta.json"
+    if mp.exists():
+        try:
+            meta = json.loads(mp.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+    host_proc = (meta.get("host_process") or "").lower()
+    dropped_records = 0
+    if host_proc:
+        kept = []
+        for r in recs:
+            if ((r.get("window") or {}).get("process") or "").lower() == host_proc:
+                dropped_records += 1
+            else:
+                kept.append(r)
+        recs = kept
+    dropped_events = 0
+    ep = Path(session_dir) / "events.jsonl"
+    if ep.exists():
+        for ln in ep.read_text(encoding="utf-8", errors="replace").splitlines():
+            if '"agent_console": true' in ln or '"agent_console":true' in ln:
+                dropped_events += 1
+
     records_by_id = {r.get("capture_id"): r for r in recs if r.get("capture_id")}
+    # Keep only app segments that still have surviving captures (console dropped).
+    surviving = set(records_by_id)
+    timeline = [seg for seg in timeline
+                if any(cid in surviving for cid in (seg.get("captures") or []))]
 
     by_key: dict = {}
     for r in recs:
@@ -639,14 +716,14 @@ def analyze_session(session_dir, label: str = "", save: bool = True,
 
     merges = []
     capture_states: dict = {}
-    if save:
-        for key, states in derived_by_key.items():
-            window = (states[0]["_rep"].get("window") if states else {}) or {}
-            m = merge_profile(key, states, window)
-            merges.append(m)
-            capture_states.update(m.get("capture_states") or {})
+    for key, states in derived_by_key.items():
+        window = (states[0]["_rep"].get("window") if states else {}) or {}
+        m = merge_profile(key, states, window, dry_run=not save)
+        merges.append(m)
+        capture_states.update(m.get("capture_states") or {})
 
-    draft = build_workflow(label, timeline, derived_by_key, records_by_id)
+    draft = build_workflow(label, timeline, derived_by_key, records_by_id,
+                           capture_states=capture_states)
     program = build_workflow_program(label, timeline, derived_by_key, records_by_id,
                                      session_dir=str(session_dir), include_ocr=include_ocr,
                                      capture_states=capture_states)
@@ -654,9 +731,10 @@ def analyze_session(session_dir, label: str = "", save: bool = True,
     # ever truncated in a tool response.
     workflow_path = None
     program_path = None
-    # A dry run (save=false) must not touch the repo: write the drafts to a temp
-    # dir instead and report their paths + dry_run:true (item 8).
-    out_dir = learning_db.WORKFLOWS_DIR if save else (ROOT / "data" / "tmp")
+    # Drafts always live OUTSIDE workflows/ (R21) so they are never picked up as
+    # real workflows by find_workflow / list_workflows. Nothing goes into the repo
+    # workflows dir until the agent calls save_workflow / save_workflow_program.
+    out_dir = ROOT / "data" / "tmp"
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
         slug = program["key"]
@@ -676,9 +754,13 @@ def analyze_session(session_dir, label: str = "", save: bool = True,
         "dry_run": not save,
         "applied": bool(save),
         "session_dir": str(session_dir),
+        "dropped_console_records": dropped_records,
+        "dropped_console_events": dropped_events,
+        "console_process": host_proc or None,
         "keys": list(derived_by_key.keys()),
         "states": {k: len(v) for k, v in derived_by_key.items()},
         "would_add": {k: len(v) for k, v in derived_by_key.items()},
+        "network_disruptive": bool(program.get("network_disruptive")),
         "profile_merges": merges,
         "workflow_name": label or "learned task",
         "workflow_path": workflow_path,

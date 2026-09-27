@@ -146,6 +146,14 @@ def _writer(session: dict) -> None:
             if event is None:
                 break
 
+            # Tag events from the agent's own console (where /learn was typed) so
+            # the summariser can drop them (R19).
+            if event.get("hwnd") and event.get("hwnd") == session.get("host_hwnd"):
+                event["agent_console"] = True
+            elif session.get("host_process") and \
+                    (event.get("process") or "").lower() == session["host_process"]:
+                event["agent_console"] = True
+
             kind = event.get("kind")
             if kind == "click":
                 x, y = int(event.get("x", 0)), int(event.get("y", 0))
@@ -258,6 +266,8 @@ def _capture_once(session: dict, loop, action: str) -> None:
         cls = ""
     # Ignore the console/terminal where /learn was typed, and the shell/taskbar.
     if hwnd == session.get("host_hwnd"):
+        return
+    if session.get("host_process") and proc == session["host_process"]:
         return
     if any(s in cls for s in _SHELL_CLASSES):
         return
@@ -410,14 +420,20 @@ def start(label: str = "") -> dict:
         session_dir = SESSIONS_DIR / f"{safe or 'session'}_{stamp}"
         session_dir.mkdir(parents=True, exist_ok=True)
 
+        host_hwnd = winapi.get_foreground_window() or 0
+        try:
+            host_proc = (winapi.get_process_name(winapi.get_window_pid(host_hwnd)) or "").lower() \
+                if host_hwnd else ""
+        except Exception:
+            host_proc = ""
         session = {
             "active": True, "label": label or "session", "dir": session_dir,
             "queue": queue.Queue(), "stop": threading.Event(), "dirty": threading.Event(),
             "events": 0, "clicks": 0, "shots": 0, "states": 0, "seq": 0,
             "reps": [], "timeline": [], "last_key": None, "last_rec": None,
             "last_click": {}, "last_action_kind": "start", "last_action_ts": None,
-            "host_hwnd": winapi.get_foreground_window() or 0, "typed": [],
-            "listeners": [], "states_path": session_dir / "states.jsonl",
+            "host_hwnd": host_hwnd, "host_process": host_proc, "started_ts": _now(),
+            "typed": [], "listeners": [], "states_path": session_dir / "states.jsonl",
         }
         _session = session
 
@@ -500,12 +516,22 @@ def stop() -> dict:
             if t:
                 t.join(timeout=8)
 
-        # persist the ordered app timeline
+        # persist the ordered app timeline + session metadata
         try:
             (session["dir"] / "app_timeline.json").write_text(
                 json.dumps(session["timeline"], ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
             logger.warning(f"tracker: could not write app_timeline.json: {e}")
+        try:
+            (session["dir"] / "session_meta.json").write_text(json.dumps({
+                "label": session["label"], "host_hwnd": session.get("host_hwnd"),
+                "host_process": session.get("host_process"),
+                "started": session.get("started_ts"), "stopped": _now(),
+                "counts": {"events": session["events"], "clicks": session["clicks"],
+                           "states": session["states"], "screenshots": session["shots"]},
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"tracker: could not write session_meta.json: {e}")
 
         session["active"] = False
         summary = {

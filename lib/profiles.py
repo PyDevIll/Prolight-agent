@@ -107,6 +107,10 @@ def validate(data: dict) -> list[str]:
                 ctrls = st.get("controls")
                 if ctrls is not None and not isinstance(ctrls, dict):
                     problems.append(f"state[{sid or i}].controls must be an object")
+    for s in shadowed_rules(data):
+        problems.append(f"state '{s['broad']}' rule {s['broad_rule']!r} is shadowed by "
+                        f"'{s['specific']}' rule {s['specific_rule']!r} (substring overlap — "
+                        f"most-specific-first routing may still mislabel; disambiguate the rules)")
     return problems
 
 
@@ -126,6 +130,35 @@ def guide_stale(profile: dict) -> bool:
     if not gs:
         return False
     return gs.get("ids_hash") != states_hash(profile)
+
+
+def shadowed_rules(profile: dict) -> list[dict]:
+    """Overlapping/shadowed detect rules: one state's rule is a substring of another's.
+
+    Such a pair makes the broader state shadow the more specific one at route
+    time (R14). Returns ``[{'broad', 'specific', 'broad_rule', 'specific_rule'}]``.
+    """
+    def norm(s: str) -> str:
+        return " ".join((s or "").split()).strip().lower()
+
+    entries: list[tuple] = []
+    for st in profile.get("states") or []:
+        det = st.get("detect") or {}
+        for key in ("uia_all", "uia_any"):
+            for r in det.get(key) or []:
+                s = norm(r.get("name") or r.get("automation_id") or "")
+                if s:
+                    entries.append((st.get("id"), s))
+    out, seen = [], set()
+    for id_a, s_a in entries:
+        for id_b, s_b in entries:
+            if id_a and id_b and id_a != id_b and s_a and s_b and s_a != s_b and s_a in s_b:
+                pair = (id_a, id_b)
+                if pair not in seen:
+                    seen.add(pair)
+                    out.append({"broad": id_a, "specific": id_b,
+                                "broad_rule": s_a, "specific_rule": s_b})
+    return out
 
 
 def template(key: str, display: str = "") -> dict:

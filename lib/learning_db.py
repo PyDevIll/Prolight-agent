@@ -261,6 +261,7 @@ def list_workflows() -> list[dict]:
     return [
         {"key": p.stem, "path": str(p), "bytes": p.stat().st_size}
         for p in sorted(WORKFLOWS_DIR.glob("*.md"))
+        if not p.stem.startswith("_")   # drafts are not real workflows (R21)
     ]
 
 
@@ -286,6 +287,8 @@ def find_workflow(query: str, limit: int = 3) -> list[dict]:
     terms = _tokens(query)
     results = []
     for path in sorted(WORKFLOWS_DIR.glob("*.md")):
+        if path.stem.startswith("_"):   # skip drafts (R21)
+            continue
         text = path.read_text(encoding="utf-8", errors="replace")
         headings = " ".join(ln for ln in text.splitlines() if ln.lstrip().startswith("#"))
         name = path.stem.lower()
@@ -299,3 +302,26 @@ def find_workflow(query: str, limit: int = 3) -> list[dict]:
             results.append({"key": path.stem, "score": score, "path": str(path)})
     results.sort(key=lambda d: d["score"], reverse=True)
     return results[:limit]
+
+
+_REF_RE = re.compile(
+    r"((?:workflows|interaction_guides)/[^\n`\"'|]+?\.(?:workflow\.json|profile\.json|md))")
+
+
+def list_links() -> list[dict]:
+    """Check references from guides/workflows to other files (R22).
+
+    Returns a list of dangling references: ``{from, ref, target, exists: false}``.
+    Useful to catch a guide that points at a workflow which was never created.
+    """
+    ensure_dirs()
+    out: list[dict] = []
+    for folder, kind in ((GUIDES_DIR, "interaction_guides"), (WORKFLOWS_DIR, "workflows")):
+        for p in sorted(folder.glob("*.md")):
+            text = p.read_text(encoding="utf-8", errors="replace")
+            for m in _REF_RE.finditer(text):
+                ref = m.group(1).rstrip(".,;:)`")
+                if not (ROOT / ref).exists():
+                    out.append({"from": f"{kind}/{p.name}", "ref": ref,
+                                "target": str(ROOT / ref), "exists": False})
+    return out

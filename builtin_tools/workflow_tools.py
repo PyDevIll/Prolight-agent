@@ -66,14 +66,24 @@ async def save_workflow_program(name: str, program: str = "", program_json: str 
     return _dump({"ok": True, "key": data.get("key"), "path": str(path), "problems": problems})
 
 
-async def start_workflow(name: str, from_step: str = "") -> str:
+async def start_workflow(name: str, from_step: str = "", confirm: bool = False,
+                         allow_draft: bool = False) -> str:
     """Load a program and (re)start its run at the first step (or ``from_step``).
+
+    A **network-disruptive** program (e.g. a VPN) returns
+    ``requires_confirmation: true`` and does **not** start until ``confirm=true``
+    — tell the user first (the run can be resumed if the connection drops). A
+    ``_draft_*`` program needs ``allow_draft=true`` (better: refine and
+    ``save_workflow_program`` first).
 
     Args:
         name: program key / task name.
         from_step: optional step id to start from (e.g. "s5").
+        confirm: acknowledge a network-disruptive workflow.
+        allow_draft: run a ``_draft_*`` program as-is.
     """
-    return _dump(workflow_runner.start(name, from_step=from_step))
+    return _dump(workflow_runner.start(name, from_step=from_step,
+                                       confirm=confirm, allow_draft=allow_draft))
 
 
 async def run_workflow_step(name: str = "") -> str:
@@ -140,12 +150,16 @@ TOOL_DEFINITIONS = [
         "start_workflow",
         start_workflow,
         "Load a workflow program and start its run (returns the ordered steps and "
-        "the current step). Then call run_workflow_step repeatedly.",
+        "the current step). Then call run_workflow_step repeatedly. A "
+        "network-disruptive program (VPN) requires confirm=true; a _draft_* "
+        "program requires allow_draft=true.",
         {
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": "Program key / task name"},
                 "from_step": {"type": "string", "description": "Optional step id to start from"},
+                "confirm": {"type": "boolean", "description": "Acknowledge a network-disruptive workflow (default false)"},
+                "allow_draft": {"type": "boolean", "description": "Run a _draft_* program as-is (default false)"},
             },
             "required": ["name"],
         },
