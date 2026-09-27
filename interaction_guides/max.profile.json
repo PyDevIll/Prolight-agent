@@ -1,0 +1,239 @@
+{
+  "key": "max",
+  "display": "MAX (web.max.ru)",
+  "version": 9,
+  "trigger": {
+    "process": [
+      "chrome.exe"
+    ],
+    "also_matches": [
+      "max",
+      "web.max.ru",
+      "веб-версия max"
+    ],
+    "url_contains": "web.max.ru"
+  },
+  "states": [
+    {
+      "id": "chat_list",
+      "detect": {
+        "ocr_all": [
+          "Чаты"
+        ],
+        "ocr_any": [
+          "Найти",
+          "Новые",
+          "Звонки"
+        ]
+      },
+      "text": "MAX web messenger - chat list is shown (no conversation open). Left icon rail x~0-70 (centre of each above its label): Новые ~[38,196], Каналы ~[38,262], Контакты ~[38,353], Звонки ~[38,419], Настройки ~[38,994]. Chat-list column x~70-520: header 'Чаты' y~112, search field 'Найти' y~163, then chat rows (avatar + name + last-message preview + time). Main area x~540+ is empty blue. Click a chat row (its name) to open the conversation.",
+      "controls": {
+        "search": {
+          "match": {
+            "ocr": "Найти"
+          }
+        },
+        "nav_new": {
+          "match": {
+            "click": [
+              38,
+              196
+            ]
+          }
+        },
+        "nav_channels": {
+          "match": {
+            "click": [
+              38,
+              262
+            ]
+          }
+        },
+        "nav_contacts": {
+          "match": {
+            "click": [
+              38,
+              353
+            ]
+          }
+        },
+        "nav_calls": {
+          "match": {
+            "click": [
+              38,
+              419
+            ]
+          }
+        },
+        "nav_settings": {
+          "match": {
+            "click": [
+              38,
+              994
+            ]
+          }
+        },
+        "chat_nazgul": {
+          "match": {
+            "ocr": "Назгуль"
+          }
+        },
+        "chat_denis": {
+          "match": {
+            "ocr": "Денис Андреевич"
+          }
+        },
+        "chat_interesting": {
+          "match": {
+            "ocr": "Хорошая мысля"
+          }
+        }
+      }
+    },
+    {
+      "id": "chat_open",
+      "detect": {
+        "ocr_all": [
+          "Чаты",
+          "Найти"
+        ],
+        "ocr_any": [
+          "назад",
+          "онлайн",
+          "был(а)",
+          "недавн",
+          "печатает",
+          "общение",
+          "Сообщение"
+        ]
+      },
+      "text": "MAX web messenger - a conversation is open. Thread header (top of main area, x~560+, y~102) shows the contact name and last-seen (e.g. '3 ч назад' / 'онлайн'). Message thread scrolls above the composer. Composer bar at the bottom (y~985-1035): attach x~870, emoji x~1430, camera x~1475, mic x~1520; the input field centre is ~[930,1008] (placeholder 'Сообщение'). Click it, type, then press Enter OR click the round blue Send button [1522,1010]. Right-click a message -> context menu (see state message_menu). NOTE: the composer sits below the router's OCR cap, so its text is usually not in ocr_scope -> message_input/send_button are coordinate controls.",
+      "controls": {
+        "message_input": {
+          "match": {
+            "click": [
+              930,
+              1008
+            ]
+          }
+        },
+        "message_input_ocr": {
+          "match": {
+            "ocr": "общение"
+          }
+        },
+        "send_button": {
+          "match": {
+            "click": [
+              1522,
+              1010
+            ]
+          }
+        },
+        "chat_search": {
+          "match": {
+            "ocr": "Найти"
+          }
+        }
+      }
+    },
+    {
+      "id": "message_menu",
+      "detect": {
+        "ocr_all": [
+          "Скопировать текст",
+          "Выбрать"
+        ]
+      },
+      "text": "Context menu opened by right-clicking a message bubble in MAX. It is a Chrome-internal popup (NOT a separate HWND; invisible to win_list_hwnd and to the UIA tree) -> locate items with screen_find(kind='text', ...). Items for your own message, top->bottom: 'Отметить непрочитанным', 'Скопировать текст', 'Выбрать', 'Удалить' (red). For a message from the contact there is also 'Пожаловаться' before 'Удалить'. Escape closes it. The menu appears next to the clicked bubble, so item Y positions shift with the bubble; the text locators below are position-independent.",
+      "controls": {
+        "mark_unread": {
+          "match": {
+            "ocr": "Отметить непрочитанным"
+          }
+        },
+        "copy_text": {
+          "match": {
+            "ocr": "Скопировать текст"
+          }
+        },
+        "select_text": {
+          "match": {
+            "ocr": "Выбрать"
+          }
+        },
+        "report": {
+          "match": {
+            "ocr": "Пожаловаться"
+          }
+        },
+        "delete_message": {
+          "match": {
+            "ocr": "Удалить"
+          }
+        }
+      }
+    },
+    {
+      "id": "delete_confirm",
+      "detect": {
+        "ocr_any": [
+          "Удалить сообщение",
+          "Удалить у всех",
+          "Не удалять"
+        ]
+      },
+      "text": "Confirmation dialog shown after choosing 'Удалить' in the message context menu. Layout (window maximized 1920x1080, dialog centred on the window): title 'Удалить сообщение?' y~496; checkbox 'Удалить у всех?' y~551 (CHECKED by default); buttons row y~630 -> 'Удалить' (left) and 'Не удалять' (right). Deleting is irreversible; confirm with the user before clicking confirm_delete.",
+      "controls": {
+        "confirm_delete": {
+          "match": {
+            "click": [
+              868,
+              630
+            ]
+          }
+        },
+        "cancel_delete": {
+          "match": {
+            "click": [
+              1052,
+              630
+            ]
+          }
+        },
+        "delete_for_all_checkbox": {
+          "match": {
+            "click": [
+              877,
+              551
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "max_page",
+      "detect": {
+        "ocr_any": [
+          "max.ru",
+          "Чаты"
+        ]
+      },
+      "text": "FALLBACK: we are on the MAX web app (URL / 'Чаты' visible) but the page body is not recognised yet - either the page is still rendering or the router's OCR scope was taken before render. Take a fresh win_snapshot(hwnd) and re-route; use win_read_text(hwnd) to read the page reliably.",
+      "controls": {}
+    }
+  ],
+  "footprints": {},
+  "updated": "2026-09-27",
+  "guide_synced": {
+    "ids_hash": "a8e8907191e4",
+    "states": [
+      "chat_list",
+      "chat_open",
+      "message_menu",
+      "delete_confirm",
+      "max_page"
+    ],
+    "updated": "2026-09-27"
+  }
+}

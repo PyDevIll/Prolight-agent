@@ -188,6 +188,14 @@ async def summarize_learning_session(session_dir: str = "", label: str = "", sav
     (states + bytes), ``states_added``/``states_refreshed``/``states_removed``
     (id lists), ``renames`` and the ``guide`` action.
 
+    The drafts are written to ``data/tmp/`` (never ``workflows/``): ``workflow_path``
+    (the ``_draft_<label>.md`` prose) and ``program_path`` (the executable
+    ``_draft_<label>.workflow.json``); the full program is also returned as
+    ``workflow_program``. This tool does **not** put anything into ``workflows/``.
+    To formalize, save **both**: ``save_workflow(name, content=<.md>)`` and
+    ``save_workflow_program(name, program=<workflow_program>)`` — the program is
+    what ``start_workflow`` / ``run_workflow_step`` execute.
+
     Args:
         session_dir: session folder (default: the most recent session).
         label: workflow/label name for the draft.
@@ -358,8 +366,12 @@ TOOL_DEFINITIONS = [
         "returns a per-app diff (mode create/merge, before/after states+bytes, "
         "states_added/refreshed/removed, renames, guide action) plus a cross-app "
         "workflow draft (apps in order, steps referencing state + named control). "
-        "With save=false it is a dry run (dry_run:true): nothing is written into "
-        "the repo (drafts go to data/tmp/). Review the draft, then save_workflow.",
+        "With save=false it is a dry run (dry_run:true). Drafts are written to "
+        "data/tmp/ (never workflows/). To FORMALIZE the workflow you MUST save "
+        "BOTH: save_workflow(name, content=<the .md draft at workflow_path>) AND "
+        "save_workflow_program(name, program=<the returned workflow_program>) — "
+        "otherwise workflows/<name>.workflow.json does not exist and "
+        "start_workflow cannot run it.",
         {
             "type": "object",
             "properties": {

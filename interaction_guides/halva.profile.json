@@ -1,0 +1,445 @@
+{
+  "key": "halva",
+  "display": "Совкомбанк «Халва» — личный кабинет (halvacard.ru/lk2) - web app in Chrome",
+  "version": 1,
+  "updated": "2026-09-27",
+  "trigger": {
+    "process": [
+      "chrome.exe"
+    ],
+    "also_matches": [
+      "halva",
+      "halvacard",
+      "halvacard.ru",
+      "халва",
+      "совкомбанк"
+    ]
+  },
+  "states": [
+    {
+      "id": "card_balance",
+      "detect": {
+        "ocr_all": [
+          "заемные"
+        ],
+        "ocr_any": [
+          "пополнить",
+          "график",
+          "важно",
+          "Ближайший",
+          "Итоговый платеж"
+        ]
+      },
+      "text": "КАРТА ХАЛВА — баланс (https://halvacard.ru/lk2/card/29105042/balance). Window = Chrome maximised 1920x1080, page scrolled to the top. HEADER y~118: лого «халва» x385 + город «Новосибирск v» x568; nav главная x681 · платежи x772 · магазины x871 · новости x957 · офисы и банкоматы x1076 · инвестиции x1208 · Выгода x1331; 2nd header row y~205: «мой банк» x386 · «все сервисы» x697 · «страхование» x555. LEFT sidebar x385-680: product tile «карта халва / 6 134,32 ₽ / итоговый платеж сформируется 01.10.2026» y271-351 (→ /balance) · «получайте привилегии зарплатного клиента» y425 · «оформить денежный кредит до 10 000 000 ₽» y533 · «кредит товарный депозитный 27 940,00 ₽» y637-694 · «долгосрочные сбережения» y774 · «открыть онлайн копилку» y882 · «Все продукты» y990 (bottom). MAIN column x816-1560: tiles row y352 (Халва баллы 50 x869 · Мои чеки за покупки x1086 · Бонусные карты 4 из 62 x1302); «Карта Халва» title y454 (breadcrumb = product header); card visual y500-700 with «карта халва • 2246», the debt amount 6 134,32 ₽ (y547), «свои 0,00 ₽» (x843) / «заемные 6 134,32 ₽» (x938) at y613-649; ACTION ROW y717-782 with icon above each label: пополнить x920 · график x1092 · **история x1263** · важно x1435; «Управлять подпиской / подписка активна до 01 октября» y847-886; «платежи и переводы» y958-976. BELOW THE FOLD (scroll down ~2 notches): «Ближайший платеж» with «от N ₽ до M ₽» and «по DD.MM.2026 оплатите», a «Подробнее о платеже» link at the row's right, then «Кешбэк / Кешбэк и рассрочка» (+ «все»), «Мои промокоды», «Предложения», «Пригласите и заработайте». RIGHT column x1443-1532: promo cards (Страховка на учебный год, 10 % скидка в аптеках «Максавит», Создаём осенний уют).",
+      "controls": {
+        "city": {
+          "match": {
+            "ocr": "Новосибирск",
+            "click": [
+              568,
+              119
+            ]
+          }
+        },
+        "nav_home": {
+          "match": {
+            "ocr": "главная",
+            "click": [
+              681,
+              118
+            ]
+          }
+        },
+        "nav_payments": {
+          "match": {
+            "ocr": "платежи",
+            "click": [
+              772,
+              118
+            ]
+          }
+        },
+        "nav_shops": {
+          "match": {
+            "ocr": "магазины",
+            "click": [
+              871,
+              118
+            ]
+          }
+        },
+        "nav_news": {
+          "match": {
+            "ocr": "новости",
+            "click": [
+              957,
+              118
+            ]
+          }
+        },
+        "nav_atms": {
+          "match": {
+            "ocr": "офисы и банкоматы",
+            "click": [
+              1076,
+              119
+            ]
+          }
+        },
+        "nav_investments": {
+          "match": {
+            "ocr": "инвестиции",
+            "click": [
+              1208,
+              119
+            ]
+          }
+        },
+        "nav_vygoda": {
+          "match": {
+            "ocr": "Выгода",
+            "click": [
+              1331,
+              119
+            ]
+          }
+        },
+        "nav_all_services": {
+          "match": {
+            "ocr": "все сервисы",
+            "click": [
+              697,
+              205
+            ]
+          }
+        },
+        "nav_insurance": {
+          "match": {
+            "ocr": "страхование",
+            "click": [
+              555,
+              205
+            ]
+          }
+        },
+        "sidebar_card": {
+          "match": {
+            "ocr": "карта халва",
+            "click": [
+              520,
+              305
+            ]
+          }
+        },
+        "sidebar_salary_project": {
+          "match": {
+            "ocr": "зарплатного",
+            "click": [
+              560,
+              440
+            ]
+          }
+        },
+        "sidebar_credit": {
+          "match": {
+            "ocr": "оформить денежный кредит",
+            "click": [
+              560,
+              548
+            ]
+          }
+        },
+        "sidebar_installment": {
+          "match": {
+            "ocr": "кредит товарный",
+            "click": [
+              560,
+              665
+            ]
+          }
+        },
+        "sidebar_savings": {
+          "match": {
+            "ocr": "долгосрочные сбережения",
+            "click": [
+              560,
+              781
+            ]
+          }
+        },
+        "sidebar_moneybox": {
+          "match": {
+            "ocr": "онлайн копилку",
+            "click": [
+              560,
+              889
+            ]
+          }
+        },
+        "all_products": {
+          "match": {
+            "ocr": "Все продукты",
+            "click": [
+              580,
+              997
+            ]
+          }
+        },
+        "card_topup": {
+          "match": {
+            "ocr": "пополнить",
+            "click": [
+              920,
+              774
+            ]
+          }
+        },
+        "card_schedule": {
+          "match": {
+            "ocr": "график",
+            "click": [
+              1092,
+              775
+            ]
+          }
+        },
+        "card_history": {
+          "match": {
+            "ocr": "история",
+            "click": [
+              1263,
+              775
+            ]
+          }
+        },
+        "card_important": {
+          "match": {
+            "ocr": "важно",
+            "click": [
+              1435,
+              774
+            ]
+          }
+        },
+        "manage_subscription": {
+          "match": {
+            "ocr": "Управлять подпиской",
+            "click": [
+              990,
+              856
+            ]
+          }
+        },
+        "payments_transfers": {
+          "match": {
+            "ocr": "платежи и переводы",
+            "click": [
+              987,
+              967
+            ]
+          }
+        },
+        "halva_points": {
+          "match": {
+            "ocr": "Халва баллы",
+            "click": [
+              917,
+              372
+            ]
+          }
+        },
+        "my_receipts": {
+          "match": {
+            "ocr": "Мои чеки",
+            "click": [
+              1121,
+              368
+            ]
+          }
+        },
+        "bonus_cards": {
+          "match": {
+            "ocr": "бонусные карты",
+            "click": [
+              1363,
+              373
+            ]
+          }
+        },
+        "payment_details": {
+          "match": {
+            "ocr": "о платеже"
+          }
+        },
+        "promo_maksavit": {
+          "match": {
+            "ocr": "Максавит",
+            "click": [
+              1146,
+              275
+            ]
+          }
+        },
+        "promo_study_insurance": {
+          "match": {
+            "ocr": "учебный год",
+            "click": [
+              1002,
+              283
+            ]
+          }
+        },
+        "promo_autumn": {
+          "match": {
+            "ocr": "осенний уют",
+            "click": [
+              1455,
+              283
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "history",
+      "detect": {
+        "ocr_all": [
+          "История операций"
+        ],
+        "ocr_any": [
+          "Успешные",
+          "неуспешные",
+          "Поиск по истории",
+          "Анализ истории"
+        ]
+      },
+      "text": "ИСТОРИЯ ОПЕРАЦИЙ — https://halvacard.ru/lk2/card/29105042/history/successful (opened by the «история» action button on the card balance page). Breadcrumb «Карта Халва» y454, «Вернуться» back link x868 y502-517. Title «История операций» y560-582, blue export/share ICON at its right (bbox [1505,548,1544,590], click [1525,571]; its accessible name is «Экспортировать историю»). Tabs «Успешные» x886 y639 / «неуспешные» x1013 y640 (the «неуспешные» tab = /history/refused; the labels are a switch, the URL is the reliable marker). Search input «Поиск по истории» x889-1021 y734-749. Month summary block x905 y825-884: «посмотреть расходы за сентябрь» + total (сентябрь 2026: 44 369,39 ₽) split «N ₽ — заёмных» / «M ₽ — своих»; «Анализ истории >» link x1393-1516 y827. Filter row y951-964: dropdown «Фильтр» x855-903 and dropdown «период» x982-1030. Then the operations list grouped by date headers (26 сентября 2026 … 3 августа 2026), each row = merchant + category + amount + instalment line «N ₽ / M мес.» (e.g. «UNIVERSAM KHOROSHIJ VY / Супермаркеты / − 1 871,91 ₽ / 1871.91 ₽ / 10 мес.»), «ПОГАШЕНИЕ КРЕДИТА / Прочее / − 1 208 ₽», and «+ N ₽» rows (refunds). The list is long — scroll down inside the page; the page itself does NOT scroll with the wheel over the header, only over the content. IMPORTANT: read the list with win_read_text (a11y TextPattern) — it returns clean Cyrillic rows, while OCR mangles them into Latin («UNIVERSAM…», «norAU_lEHVIE KPEAVITA»).",
+      "controls": {
+        "back": {
+          "match": {
+            "ocr": "Вернуться",
+            "click": [
+              868,
+              509
+            ]
+          }
+        },
+        "tab_successful": {
+          "match": {
+            "ocr": "Успешные",
+            "click": [
+              886,
+              639
+            ]
+          }
+        },
+        "tab_refused": {
+          "match": {
+            "ocr": "неуспешные",
+            "click": [
+              1013,
+              640
+            ]
+          }
+        },
+        "export_history": {
+          "match": {
+            "ocr": "Экспортировать историю",
+            "click": [
+              1525,
+              571
+            ]
+          }
+        },
+        "search_history": {
+          "match": {
+            "ocr": "Поиск по истории",
+            "click": [
+              955,
+              741
+            ]
+          }
+        },
+        "month_expenses": {
+          "match": {
+            "ocr": "расходы за",
+            "click": [
+              1015,
+              832
+            ]
+          }
+        },
+        "analysis": {
+          "match": {
+            "ocr": "Анализ истории",
+            "click": [
+              1453,
+              833
+            ]
+          }
+        },
+        "filter": {
+          "match": {
+            "ocr": "Фильтр",
+            "click": [
+              879,
+              957
+            ]
+          }
+        },
+        "period": {
+          "match": {
+            "ocr": "период",
+            "click": [
+              1006,
+              957
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "fallback",
+      "detect": {
+        "ocr_any": [
+          "халва",
+          "Все продукты",
+          "halvacard.ru",
+          "СуперБонусы",
+          "Халва баллы"
+        ]
+      },
+      "text": "FALLBACK (low priority): a halvacard.ru page is open in Chrome but is not the card balance or the operations history — «Все продукты», другой продукт (кредит/вклад/копилка/брокерский счёт), платежи, магазины, новости, офисы. The left sidebar («карта халва», «Все продукты») is present on every logged-in page, so use it (or nav «главная») to come back to the card. Re-read the URL with win_read_text to know where you are — the window title is always «Личный кабинет».",
+      "controls": {
+        "sidebar_card": {
+          "match": {
+            "ocr": "карта халва",
+            "click": [
+              520,
+              305
+            ]
+          }
+        },
+        "nav_home": {
+          "match": {
+            "ocr": "главная",
+            "click": [
+              681,
+              118
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "footprints": {},
+  "guide_synced": {
+    "ids_hash": "35c8c1ebaa01",
+    "states": [
+      "card_balance",
+      "history",
+      "fallback"
+    ],
+    "updated": "2026-09-27"
+  }
+}

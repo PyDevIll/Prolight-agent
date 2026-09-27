@@ -115,8 +115,15 @@ reference the app (guide key), the **state** and a named control, not pixels.
   `run_workflow_step()` (no LLM for the resolved steps; see the WORKFLOW
   EXECUTION fragment). `summarize_learning_session` drafts one automatically
   (`_draft_<label>.workflow.json`); refine it and `save_workflow_program(...)`.
+- **Formalizing is two saves, not one.** A workflow only exists once *both*
+  `save_workflow(name, content)` (`workflows/<name>.md`) **and**
+  `save_workflow_program(name, program=<the returned workflow_program>)`
+  (`workflows/<name>.workflow.json`) have run. `summarize_learning_session`
+  writes **drafts to `data/tmp/`**, never to `workflows/` — so saving only the
+  `.md` leaves no runnable program (`workflows/*.workflow.json` stays empty and
+  `start_workflow` has nothing to run).
 - After completing a task that is likely to recur — or when the user teaches you
-  one — `save_workflow(name, content)`.
+  one — save both as above.
 
 ### Learning mode (recording the user)
 The user can start/stop this directly from the console — `/learn [label]` and
@@ -157,8 +164,12 @@ To learn a workflow the user performs:
    `delete_profile_footprint` manage states). With `save=false` it is a dry run
    (`dry_run:true` + `profile_merges` previews with `applied:false`,
    drafts in `data/tmp/`).
-5. Read the draft file, refine and `save_workflow(...)` (and
-   `save_workflow_program(...)` for the executable program), then `ask_user(...)` to confirm.
+5. Read the draft file, refine, then formalize with **both** saves:
+   `save_workflow(name, content=<the .md draft>)` **and**
+   `save_workflow_program(name, program=<the returned `workflow_program`>)` —
+   the `.md` alone is **not** a runnable workflow. Then `ask_user(...)` to
+   confirm. (A `network_disruptive` program — e.g. a VPN — still needs
+   `start_workflow(confirm=true)` to run.)
 6. `learning_status()` tells you whether a recording is active; when it is not it
    returns the most recent session on disk, so "already stopped", "never
    started" and "crashed" are distinguishable (stopping twice returns

@@ -1,0 +1,448 @@
+{
+  "key": "rsb",
+  "display": "Банк Русский Стандарт — Интернет-банк (online.rsb.ru) - web app in Chrome",
+  "version": 1,
+  "updated": "2026-09-27",
+  "trigger": {
+    "process": [
+      "chrome.exe"
+    ],
+    "also_matches": [
+      "rsb",
+      "online.rsb.ru",
+      "русский стандарт",
+      "банк русский стандарт",
+      "rsb.ru"
+    ]
+  },
+  "states": [
+    {
+      "id": "main",
+      "detect": {
+        "ocr_all": [
+          "оплатить до"
+        ],
+        "ocr_any": [
+          "Оформить карту",
+          "Оформить счет",
+          "Избранное",
+          "Карты других банков"
+        ]
+      },
+      "text": "ГЛАВНАЯ (https://online.rsb.ru/main) интернет-банка Банк Русский Стандарт. Layout (Chrome maximised 1920x1080, window at [-8,-8]). HEADER nav y~128: Главная x745 · Платежи и переводы x884 · История x1026 · Предложения банка x1165 · Акции x1295 · Документы x1392. LEFT column x~344-650: 'Карты' (heading y211, 'Оформить карту' button) with 4 product tiles — each tile = name + balance + type + mask, tiles at y~254-309 (МИР в кармане, кредитная, •8566), y~345-400 (Русский Стандарт, кредитная, •6796), y~436-491 (130 дней без %, кредитная, •9662), y~527-582 (Банк в кармане Digital, дебетовая, •5662); 'Кредиты' (heading y634, 'Оформить кредит') with 3 tiles y~677-732 (Кредит Классика) / y~768-823 (Надежный кредит) / y~859-914 (Кредитная линия+), each showing debt + 'N ₽ оплатить до DD.MM.YYYY'; 'Счета' (heading y964, 'Оформить счет') with 'Текущий счет' y~1009-1044. A click on a tile opens that product page (/card/<id> or /credit/<id>). MAIN column: credit offer block 'Одобрено 990 000 ₽ / Выгодная ставка / Предложение ограничено' (x751-1175, y235-468); a transfer widget ('Переводы / Номер телефона получателя / По реквизитам'); 'Избранное' (y548-567, 'все' link at x1525) with tiles Автоплатежи y686, Моя квартира y810; 'Платежи' y897 with tiles Сотовая связь x813, Интернет и ТВ x1030, ЖКХ x1247, За рубеж x1464 (y1026); 'Счета на оплату' x1299 y810. Footer: курсы валют (USD ПОКУПКА/ПРОДАЖА, EUR), поддержка 24 часа, © АО «Банк Русский Стандарт», лицензия ЦБ № 2289.",
+      "controls": {
+        "nav_home": {
+          "match": {
+            "ocr": "Главная",
+            "click": [
+              745,
+              128
+            ]
+          }
+        },
+        "nav_payments": {
+          "match": {
+            "ocr": "Платежи и переводы",
+            "click": [
+              884,
+              128
+            ]
+          }
+        },
+        "nav_history": {
+          "match": {
+            "ocr": "История",
+            "click": [
+              1026,
+              128
+            ]
+          }
+        },
+        "nav_suggestions": {
+          "match": {
+            "ocr": "Предложения банка",
+            "click": [
+              1165,
+              128
+            ]
+          }
+        },
+        "nav_promotions": {
+          "match": {
+            "ocr": "Акции",
+            "click": [
+              1295,
+              128
+            ]
+          }
+        },
+        "nav_documents": {
+          "match": {
+            "ocr": "Документы",
+            "click": [
+              1392,
+              128
+            ]
+          }
+        },
+        "card_mir_v_karmane": {
+          "match": {
+            "ocr": "8566",
+            "click": [
+              520,
+              280
+            ]
+          }
+        },
+        "card_russky_standart": {
+          "match": {
+            "ocr": "6796",
+            "click": [
+              520,
+              370
+            ]
+          }
+        },
+        "card_130_dney": {
+          "match": {
+            "ocr": "9662",
+            "click": [
+              520,
+              460
+            ]
+          }
+        },
+        "card_bank_v_karmane_digital": {
+          "match": {
+            "ocr": "5662",
+            "click": [
+              520,
+              550
+            ]
+          }
+        },
+        "credit_klassika": {
+          "match": {
+            "ocr": "Классика",
+            "click": [
+              520,
+              700
+            ]
+          }
+        },
+        "credit_nadezhny": {
+          "match": {
+            "ocr": "ежный",
+            "click": [
+              520,
+              795
+            ]
+          }
+        },
+        "credit_linia_plus": {
+          "match": {
+            "ocr": "линия",
+            "click": [
+              520,
+              880
+            ]
+          }
+        },
+        "account_current": {
+          "match": {
+            "ocr": "Текущий счет",
+            "click": [
+              520,
+              1025
+            ]
+          }
+        },
+        "new_card": {
+          "match": {
+            "ocr": "Оформить карту"
+          }
+        },
+        "new_credit": {
+          "match": {
+            "ocr": "Оформить кредит"
+          }
+        },
+        "new_account": {
+          "match": {
+            "ocr": "Оформить счет"
+          }
+        },
+        "offer_block": {
+          "match": {
+            "click": [
+              960,
+              350
+            ]
+          }
+        },
+        "favorites_all": {
+          "match": {
+            "click": [
+              1535,
+              556
+            ]
+          }
+        },
+        "favorite_autopayments": {
+          "match": {
+            "ocr": "Автоплатежи",
+            "click": [
+              810,
+              686
+            ]
+          }
+        },
+        "favorite_flat": {
+          "match": {
+            "ocr": "Моя квартира",
+            "click": [
+              855,
+              810
+            ]
+          }
+        },
+        "pay_invoices": {
+          "match": {
+            "ocr": "Счета на оплату",
+            "click": [
+              1299,
+              810
+            ]
+          }
+        },
+        "pay_mobile": {
+          "match": {
+            "ocr": "Сотовая связь",
+            "click": [
+              813,
+              1026
+            ]
+          }
+        },
+        "pay_internet_tv": {
+          "match": {
+            "ocr": "Интернет и ТВ",
+            "click": [
+              1030,
+              1026
+            ]
+          }
+        },
+        "pay_jkh": {
+          "match": {
+            "ocr": "жкх",
+            "click": [
+              1247,
+              1026
+            ]
+          }
+        },
+        "pay_abroad": {
+          "match": {
+            "ocr": "За рубеж",
+            "click": [
+              1464,
+              1026
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "card_detail",
+      "detect": {
+        "ocr_all": [
+          "Баланс на"
+        ],
+        "ocr_any": [
+          "Доступный остаток",
+          "Собственные средства",
+          "номер карты"
+        ]
+      },
+      "text": "СТРАНИЦА КАРТЫ (/card/<id>), opened from a 'Карты' tile on the main page. Header = the card name (x749 y209-228). LEFT: the card visual (МИР/…) with 'Баланс на <date>, <time>'; actions y~433-483 ('Показать номер карты и CVC', 'Информация о карте' collapsible y~630, 'Условия и тарифы' y~686); for CREDIT cards the payment block below: 'Полная задолженность N ₽ + Оплатить', 'Оставшаяся сумма минимального платежа N ₽ + Оплатить', 'Дата оплаты минимального платежа DD.MM.YYYY' (y~727-916). MIDDLE column x~990-1285: 'Доступный остаток' y~276, 'Собственные средства' y~326, 'Кредитные средства' y~374 (credit cards only), 'Заблокированная сумма' y~422, 'Кредитный лимит' + 'Увеличить лимит' y~471 (credit cards only), 'N Бонусов' (bonus programme) y~550, 'Реквизиты счета' link y~651. RIGHT column x~1328-1520: links 'Действия с картой' y223, 'Услуги' y281, 'Страховые программы' y339, 'Расходные лимиты карты' y398, ('Рассрочка' y454), 'Бонусная программа' y511. Below: 'Последние операции' + 'Фильтр' and the operations list. Values are NOT in the a11y text — read them with OCR (win_snapshot region or include=[\"text\"]).",
+      "controls": {
+        "show_card_number": {
+          "match": {
+            "ocr": "номер карты и CVC",
+            "click": [
+              813,
+              475
+            ]
+          }
+        },
+        "card_info": {
+          "match": {
+            "ocr": "Информация о карте",
+            "click": [
+              818,
+              641
+            ]
+          }
+        },
+        "card_terms": {
+          "match": {
+            "ocr": "Условия и тарифы",
+            "click": [
+              780,
+              686
+            ]
+          }
+        },
+        "card_actions": {
+          "match": {
+            "ocr": "Действия с картой"
+          }
+        },
+        "card_services": {
+          "match": {
+            "ocr": "Услуги",
+            "click": [
+              1353,
+              281
+            ]
+          }
+        },
+        "card_insurance": {
+          "match": {
+            "ocr": "Страховые программы"
+          }
+        },
+        "card_spend_limits": {
+          "match": {
+            "ocr": "Расходные лимиты"
+          }
+        },
+        "card_installments": {
+          "match": {
+            "ocr": "Рассрочка"
+          }
+        },
+        "card_bonus_programme": {
+          "match": {
+            "ocr": "Бонусная программа"
+          }
+        },
+        "card_requisites": {
+          "match": {
+            "ocr": "Реквизиты счета",
+            "click": [
+              1226,
+              651
+            ]
+          }
+        },
+        "increase_limit": {
+          "match": {
+            "ocr": "Увеличить лимит"
+          }
+        },
+        "pay_debt": {
+          "match": {
+            "ocr": "Оплатить",
+            "click": [
+              1247,
+              786
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "credit_detail",
+      "detect": {
+        "ocr_all": [
+          "Информация о кредите"
+        ],
+        "ocr_any": [
+          "Остаток основного",
+          "Осталось для",
+          "График платежей"
+        ]
+      },
+      "text": "СТРАНИЦА КРЕДИТА (/credit/<id>), opened from a 'Кредиты' tile on the main page. Top-left '< <Название кредита>' back link (x713 y208-228). MIDDLE column x~990-1285: 'Осталось для полного погашения по графику' y~276, 'Осталось для оплаты по графику' y~370 (amount + 'до DD.MM.YYYY'), 'Остаток основного долга' y~437, 'Остаток размещённых денежных средств' y~505, 'Реквизиты счета' link y~627. MAIN column: 'Информация на <date>' y~305; 'Информация о кредите' collapsible y~627 covering 'Текущая процентная ставка' y676, 'Срок кредита' y717, 'Номер договора' y758, 'Дата заключения договора' y799, 'Сумма предоставленного кредита' y840 (values at x~1180-1280); 'Подробная информация' y882; 'График платежей' y934 with the next instalments (date + Оплачен/Предстоящий + Сумма + Статус, table headers y~988) and 'Смотреть весь график'. Left column keeps the product list, so you can jump straight from one product to another.",
+      "controls": {
+        "credit_info": {
+          "match": {
+            "ocr": "Информация о кредите"
+          }
+        },
+        "credit_actions": {
+          "match": {
+            "ocr": "Действия с кредитом"
+          }
+        },
+        "credit_schedule": {
+          "match": {
+            "ocr": "График платежей"
+          }
+        },
+        "credit_full_schedule": {
+          "match": {
+            "ocr": "Смотреть весь график"
+          }
+        },
+        "credit_details": {
+          "match": {
+            "ocr": "Подробная информация"
+          }
+        },
+        "credit_requisites": {
+          "match": {
+            "ocr": "Реквизиты счета",
+            "click": [
+              1229,
+              627
+            ]
+          }
+        },
+        "back": {
+          "match": {
+            "click": [
+              790,
+              218
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "fallback",
+      "detect": {
+        "ocr_any": [
+          "online.rsb.ru",
+          "Русский Стандарт",
+          "русский СТАНДАРТ"
+        ]
+      },
+      "text": "FALLBACK (low priority): an online.rsb.ru page is open in Chrome but not recognised — still rendering, the login page, or another section (История / Предложения банка / Акции / Документы / Платежи и переводы / Бонусы / Рассрочки / Карты других банков). Re-snapshot with win_read_text(hwnd) (the URL is in the text) and use the header nav to get back to 'Главная'.",
+      "controls": {
+        "nav_home": {
+          "match": {
+            "ocr": "Главная",
+            "click": [
+              745,
+              128
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "footprints": {},
+  "guide_synced": {
+    "ids_hash": "20300aecb775",
+    "states": [
+      "main",
+      "card_detail",
+      "credit_detail",
+      "fallback"
+    ],
+    "updated": "2026-09-27"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "key": "chrome",
+  "display": "Google Chrome",
+  "version": 1,
+  "trigger": {"process": ["chrome.exe"], "also_matches": ["google chrome", "chromium"]},
+  "states": [
+    {
+      "id": "browser",
+      "detect": {"uia_any": [{"name": "Google Chrome"}]},
+      "text": "Chrome browser window (browser chrome only; page content ignored). Tab strip y~0-40 (tab-search ~20, tabs, + ~530, min/max/close 1804/1851/1896). Toolbar y~44-86: back 22, forward 59, reload 95, omnibox pill x121-1744 (site-info 132, bookmark star 1721), extension buttons 1771/1807, avatar 1858, 3-dot menu 1897. Nav buttons act on the ACTIVE tab only. Menus/bubbles are separate Chrome_WidgetWin_1 popups (tool_window/no_activate/topmost, owner=main): read labels with win_read_text(popup_hwnd); Esc closes.",
+      "controls": {
+        "tab_search": {"match": {"click": [20, 19]}},
+        "new_tab_button": {"match": {"click": [530, 20]}},
+        "back_button": {"match": {"click": [22, 63]}},
+        "forward_button": {"match": {"click": [59, 63]}},
+        "reload_button": {"match": {"click": [95, 63]}},
+        "omnibox": {"match": {"click": [700, 63]}},
+        "site_info_button": {"match": {"click": [132, 63]}},
+        "bookmark_star": {"match": {"click": [1721, 63]}},
+        "extension_button_1": {"match": {"click": [1771, 63]}},
+        "extension_button_2": {"match": {"click": [1807, 63]}},
+        "profile_button": {"match": {"click": [1858, 63]}},
+        "main_menu_button": {"match": {"click": [1897, 63]}},
+        "window_minimize": {"match": {"click": [1804, 19]}},
+        "window_maximize_restore": {"match": {"click": [1851, 19]}},
+        "window_close": {"match": {"click": [1896, 19]}},
+        "new_tab": {"match": {"click": [530, 20]}, "hotkey": "ctrl+t"},
+        "new_window": {"match": {"click": [1897, 63]}, "hotkey": "ctrl+n"},
+        "incognito_window": {"match": {"click": [1897, 63]}, "hotkey": "ctrl+shift+n"},
+        "close_tab": {"match": {"click": [1897, 63]}, "hotkey": "ctrl+w"},
+        "reopen_closed_tab": {"match": {"click": [1897, 63]}, "hotkey": "ctrl+shift+t"},
+        "focus_omnibox": {"match": {"click": [700, 63]}, "hotkey": "ctrl+l"},
+        "find_in_page": {"match": {"click": [1897, 63]}, "hotkey": "ctrl+f"},
+        "history": {"match": {"click": [1897, 63]}, "hotkey": "ctrl+h"},
+        "downloads": {"match": {"click": [1897, 63]}, "hotkey": "ctrl+j"},
+        "bookmarks_manager": {"match": {"click": [1897, 63]}, "hotkey": "ctrl+shift+o"},
+        "clear_browsing_data": {"match": {"click": [1897, 63]}, "hotkey": "ctrl+shift+delete"},
+        "print": {"match": {"click": [1897, 63]}, "hotkey": "ctrl+p"},
+        "devtools": {"match": {"click": [1897, 63]}, "hotkey": "f12"}
+      }
+    },
+    {
+      "id": "main_menu",
+      "detect": {"ocr_all": ["Новая вкладка", "Новое окно"], "ocr_any": ["Расширения", "Справка"]},
+      "text": "Chrome 3-dot main menu open (RU UI). 'ocr' controls resolve against the visible label; coordinate controls are approximate (maximized 1920x1080). win_read_text on the popup lists every label; Esc closes.",
+      "controls": {
+        "new_tab_item": {"match": {"ocr": "Новая вкладка"}},
+        "new_window_item": {"match": {"ocr": "Новое окно"}},
+        "incognito_item": {"match": {"ocr": "инкогнито"}},
+        "history_item": {"match": {"ocr": "История"}},
+        "extensions_item": {"match": {"ocr": "Расширения"}},
+        "settings_item": {"match": {"ocr": "Настройки"}},
+        "translate_item": {"match": {"ocr": "Перевести"}},
+        "passwords_item": {"match": {"click": [1600, 253]}},
+        "downloads_item": {"match": {"click": [1542, 309]}},
+        "bookmarks_item": {"match": {"click": [1568, 336]}},
+        "clear_data_item": {"match": {"click": [1624, 421]}},
+        "print_item": {"match": {"click": [1542, 509]}},
+        "more_tools_item": {"match": {"click": [1603, 651]}},
+        "help_item": {"match": {"click": [1540, 696]}},
+        "exit_item": {"match": {"click": [1536, 751]}}
+      }
+    }
+++ interaction_guides/chrome.profile.json
+  ],
+  "footprints": {}
+}
+
+
+}

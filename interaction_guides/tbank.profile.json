@@ -1,0 +1,845 @@
+{
+  "key": "tbank",
+  "display": "Т-Банк личный кабинет (tbank.ru/mybank) - web app in Chrome",
+  "version": 6,
+  "updated": "2026-09-27",
+  "trigger": {
+    "process": [
+      "chrome.exe"
+    ],
+    "also_matches": [
+      "tbank",
+      "т-банк",
+      "тбанк",
+      "tbank.ru"
+    ]
+  },
+  "states": [
+    {
+      "id": "main",
+      "detect": {
+        "ocr_all": [
+          "Кэшбэк и бонусы"
+        ],
+        "ocr_any": [
+          "Новый счет или продукт",
+          "операции в сентябре",
+          "Все предложения",
+          "Самозанятость",
+          "Пополнения"
+        ]
+      },
+      "text": "Т-Банк личный кабинет, ГЛАВНАЯ (https://www.tbank.ru/mybank/). Layout (Chrome maximised 1920x1080, window at [-8,-8]): LEFT column x~456-750 = greeting 'Добрый день' + product cards (Black 3 673,52 р, promo 'Сделайте Black основной картой…', Платинум 116,80 р, Самозанятость, Потребительский кредит 0 р, 'Показать скрытое', yellow 'Новый счет или продукт'). MAIN column x~860-1430 = search field y~351, 4 round quick-action tiles y~458-489 (Перевести по телефону / Перевести по реквизитам / Оплатить мобильный / Распознать квитанцию), 'Кэшбэк и бонусы' block + 'Все предложения' link y~556-640, 'Операции в сентябре' y~787 with Траты/Пополнения tabs + donut chart + category legend. TOP bar row 1 y~117 (Бизнес, Инвестиции, Мобильная связь, Путешествия, Долями, profile 'Андрей'), main menu row 2 y~175 (Главная, Операции, Платежи, Бонусы, Город, Ещё, far right 'Все продукты'). Page text is readable with win_read_text(hwnd); UIA exposes only Window+Pane, so controls are OCR needles or coordinates.",
+      "controls": {
+        "nav_business": {
+          "match": {
+            "click": [
+              596,
+              115
+            ]
+          }
+        },
+        "nav_investments": {
+          "match": {
+            "click": [
+              672,
+              116
+            ]
+          }
+        },
+        "nav_mobile": {
+          "match": {
+            "click": [
+              759,
+              116
+            ]
+          }
+        },
+        "nav_travel": {
+          "match": {
+            "click": [
+              975,
+              117
+            ]
+          }
+        },
+        "nav_dolyame": {
+          "match": {
+            "click": [
+              1054,
+              116
+            ]
+          }
+        },
+        "profile": {
+          "match": {
+            "click": [
+              1392,
+              117
+            ]
+          }
+        },
+        "menu_home": {
+          "match": {
+            "ocr": "лввнз",
+            "click": [
+              477,
+              174
+            ]
+          }
+        },
+        "menu_operations": {
+          "match": {
+            "ocr": "Опер",
+            "click": [
+              548,
+              175
+            ]
+          }
+        },
+        "menu_payments": {
+          "match": {
+            "ocr": "тежи",
+            "click": [
+              622,
+              174
+            ]
+          }
+        },
+        "menu_bonuses": {
+          "match": {
+            "ocr": "Бонус",
+            "click": [
+              686,
+              175
+            ]
+          }
+        },
+        "menu_city": {
+          "match": {
+            "ocr": "дюз",
+            "click": [
+              745,
+              175
+            ]
+          }
+        },
+        "menu_more": {
+          "match": {
+            "ocr": "Еще",
+            "click": [
+              842,
+              174
+            ]
+          }
+        },
+        "all_products": {
+          "match": {
+            "click": [
+              1348,
+              175
+            ]
+          }
+        },
+        "search": {
+          "match": {
+            "click": [
+              896,
+              351
+            ]
+          }
+        },
+        "card_black": {
+          "match": {
+            "click": [
+              600,
+              390
+            ]
+          }
+        },
+        "card_platinium": {
+          "match": {
+            "click": [
+              600,
+              610
+            ]
+          }
+        },
+        "self_employment": {
+          "match": {
+            "ocr": "Самозанятость"
+          }
+        },
+        "credit": {
+          "match": {
+            "click": [
+              600,
+              840
+            ]
+          }
+        },
+        "show_hidden": {
+          "match": {
+            "ocr": "Показать скрытое"
+          }
+        },
+        "new_product": {
+          "match": {
+            "ocr": "Новый счет или продукт"
+          }
+        },
+        "transfer_phone": {
+          "match": {
+            "click": [
+              900,
+              472
+            ]
+          }
+        },
+        "transfer_requisites": {
+          "match": {
+            "click": [
+              1065,
+              472
+            ]
+          }
+        },
+        "pay_mobile": {
+          "match": {
+            "click": [
+              1210,
+              472
+            ]
+          }
+        },
+        "scan_receipt": {
+          "match": {
+            "click": [
+              1366,
+              472
+            ]
+          }
+        },
+        "cashback_block": {
+          "match": {
+            "ocr": "Кэшбэк и бонусы"
+          }
+        },
+        "all_offers": {
+          "match": {
+            "ocr": "Все предложения"
+          }
+        },
+        "operations_september": {
+          "match": {
+            "ocr": "операции в сентябре"
+          }
+        },
+        "tab_topups": {
+          "match": {
+            "ocr": "Пополнения"
+          }
+        }
+      }
+    },
+    {
+      "id": "fallback",
+      "detect": {
+        "ocr_any": [
+          "tbank.ru",
+          "ТБанк",
+          "Т-Банк"
+        ]
+      },
+      "text": "FALLBACK (low priority): a tbank.ru page is open in Chrome but the home page is not recognised - page still rendering, or another section (Операции/Платежи/Бонусы/Город/Настройки), or the login/SSO frame. Take a fresh win_snapshot(hwnd) + win_read_text(hwnd) and re-route; use menu_home (top main menu row y~175, x~477) to return to Главная.",
+      "controls": {
+        "menu_home": {
+          "match": {
+            "ocr": "лввнз",
+            "click": [
+              477,
+              174
+            ]
+          }
+        },
+        "menu_operations": {
+          "match": {
+            "ocr": "Опер",
+            "click": [
+              548,
+              175
+            ]
+          }
+        },
+        "menu_payments": {
+          "match": {
+            "ocr": "тежи",
+            "click": [
+              622,
+              174
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "operations",
+      "detect": {
+        "ocr_all": [
+          "Счета и карты"
+        ],
+        "ocr_any": [
+          "Без переводов",
+          "Доходы"
+        ]
+      },
+      "text": "Раздел ОПЕРАЦИИ (/mybank/operations/). Heading 'Операции' (x458 y268). Search field y~343. Filters row y~410: 'Сентябрь' (month picker, x491), 'Счета и карты' (x600), 'Без переводов' (x724), download/report icon at the right end x~1030. Two summary cards: '101 656 ₽ / Траты' (x~478-568, label y496) and '90 858 ₽ / Доходы' (x~794-873). Banner 'Доступна рассрочка — для N операций на сумму …' (y~613-645). Then the transaction list, grouped by date headers (сегодня y698, вчера y903, 25/23/22/21 сентября), each row = icon, title, category, amount, card (e.g. 'Пополнение Кубышки −20 000 ₽ Переводы Black' y753, 'Себе из другого банка +20 000 ₽ Переводы Black' y825, 'СберТройка −481 ₽ Местный транспорт Дебетовая карта' y958, 'Мария РА −409,55 ₽ Супермаркеты Дебетовая карта' y1030). The content column is narrow (x~456-1090); clicking a row opens the operation detail. Row geometry: first row of a group ~y760, next rows +72 px.",
+      "controls": {
+        "search": {
+          "match": {
+            "click": [
+              508,
+              351
+            ]
+          }
+        },
+        "filter_month": {
+          "match": {
+            "click": [
+              491,
+              410
+            ]
+          }
+        },
+        "filter_accounts": {
+          "match": {
+            "click": [
+              600,
+              410
+            ]
+          }
+        },
+        "filter_no_transfers": {
+          "match": {
+            "click": [
+              724,
+              410
+            ]
+          }
+        },
+        "download_report": {
+          "match": {
+            "click": [
+              1030,
+              410
+            ]
+          }
+        },
+        "summary_spend": {
+          "match": {
+            "click": [
+              496,
+              502
+            ]
+          }
+        },
+        "summary_income": {
+          "match": {
+            "click": [
+              818,
+              502
+            ]
+          }
+        },
+        "first_row": {
+          "match": {
+            "click": [
+              578,
+              760
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "payments",
+      "detect": {
+        "ocr_all": [
+          "Платежи и переводы"
+        ],
+        "ocr_any": [
+          "Счета на оплату",
+          "Погашение кредитов",
+          "Перевод по телефону"
+        ]
+      },
+      "text": "Раздел ПЛАТЕЖИ И ПЕРЕВОДЫ (/mybank/payments/). Heading 'Платежи и переводы' (x458 y268). LEFT column: 'Счета на оплату' button y~352; 'Избранное' (x479 y430-449) with saved favourites — 'Мой телефон' y491, 'МТС Mobile 350 ₽' y535, 'Перевод на карту' y599, 'Добавить' y658. MAIN column: search y~343; 'Перевод по телефону' section y~423-442 with a recipient field ('Имя или номер' y484) and the saved-recipient avatar grid (y523-608: Лавда/ProLight, Александр Казенцев, Александр, Александр, ProLight, Александр Целищев), 'Перевод по СБП' tab; 'Переводы' category y~685 with tiles 'Из другого банка' (x967 y736), 'Между счетами' (x1265 y736), 'По номеру карты' (x967 y793), 'По номеру договора' (x1280 y793), 'По реквизитам' (x961 y851), 'SWIFT-переводы' (x1268 y851); 'Платежи' category y~949 with 'Мобильная связь' y1001, ЖКХ, Игры, Госуслуги, Погашение кредитов, Интернет ТВ и телефония; 'Действия / Запросить деньги'. NOTE: these are real payment entry forms — ask the user before submitting anything.",
+      "controls": {
+        "search": {
+          "match": {
+            "click": [
+              897,
+              351
+            ]
+          }
+        },
+        "invoices": {
+          "match": {
+            "ocr": "Счета на оплату"
+          }
+        },
+        "favorites": {
+          "match": {
+            "ocr": "збранное"
+          }
+        },
+        "fav_mobile": {
+          "match": {
+            "click": [
+              567,
+              491
+            ]
+          }
+        },
+        "fav_mts": {
+          "match": {
+            "click": [
+              581,
+              535
+            ]
+          }
+        },
+        "fav_transfer_card": {
+          "match": {
+            "click": [
+              580,
+              599
+            ]
+          }
+        },
+        "fav_add": {
+          "match": {
+            "click": [
+              606,
+              658
+            ]
+          }
+        },
+        "transfer_phone_form": {
+          "match": {
+            "ocr": "перевод по телефону"
+          }
+        },
+        "category_transfers": {
+          "match": {
+            "click": [
+              912,
+              685
+            ]
+          }
+        },
+        "transfer_other_bank": {
+          "match": {
+            "click": [
+              967,
+              736
+            ]
+          }
+        },
+        "transfer_between_accounts": {
+          "match": {
+            "click": [
+              1265,
+              736
+            ]
+          }
+        },
+        "transfer_by_card": {
+          "match": {
+            "click": [
+              967,
+              793
+            ]
+          }
+        },
+        "transfer_by_agreement": {
+          "match": {
+            "click": [
+              1280,
+              793
+            ]
+          }
+        },
+        "transfer_requisites": {
+          "match": {
+            "click": [
+              961,
+              851
+            ]
+          }
+        },
+        "transfer_swift": {
+          "match": {
+            "click": [
+              1268,
+              851
+            ]
+          }
+        },
+        "category_payments": {
+          "match": {
+            "click": [
+              912,
+              949
+            ]
+          }
+        },
+        "category_mobile": {
+          "match": {
+            "click": [
+              969,
+              1001
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "bonuses",
+      "detect": {
+        "ocr_all": [
+          "больше выгоды"
+        ],
+        "ocr_any": [
+          "приглашайте друзей",
+          "Приглашайте друзей",
+          "Кэшбэк у партнеров"
+        ]
+      },
+      "text": "Раздел КЭШБЭК И БОНУСЫ (/mybank/bonuses/). Heading 'Кэшбэк и бонусы' (x458 y267). LEFT column: 'Подписка / Больше кэшбэка и бонусов' y343-381; banner 'Оформите автокредит онлайн' y445-503. MAIN column: search y~345; 'Получайте больше выгоды' y427-446 with offer cards — 'Повышенный кэшбэк на сентябрь' + 'Выбрать' button (x~910 y564), 'Кэшбэк до 40% за подписки', 'Кэшбэк до 50% в Городе', 'Кэшбэк до 7% за путешествия'; 'Приглашайте друзей' y661-680 with cards Black (вам 500 ₽), Платинум (5 000 ₽), Т-Мобайл (500 ₽), Счёт для бизнеса (7 000 ₽), Black для родителей — each card y~705-760 at x≈895/1044/1179/1332; 'Кэшбэк у партнеров' y887-906 with category tabs y~985 (Новые, Еда, Путешествия, …, Дом и ремонт) and partner offer tiles below. 'Выбрать' and the friend cards are real actions (they change the cashback selection) — confirm with the user first.",
+      "controls": {
+        "search": {
+          "match": {
+            "click": [
+              912,
+              350
+            ]
+          }
+        },
+        "subscription": {
+          "match": {
+            "click": [
+              513,
+              350
+            ]
+          }
+        },
+        "choose_cashback_september": {
+          "match": {
+            "click": [
+              910,
+              564
+            ]
+          }
+        },
+        "friends_black": {
+          "match": {
+            "click": [
+              895,
+              710
+            ]
+          }
+        },
+        "friends_platinium": {
+          "match": {
+            "click": [
+              1044,
+              710
+            ]
+          }
+        },
+        "friends_tmobile": {
+          "match": {
+            "click": [
+              1179,
+              710
+            ]
+          }
+        },
+        "friends_business": {
+          "match": {
+            "click": [
+              1332,
+              710
+            ]
+          }
+        },
+        "partners_section": {
+          "match": {
+            "ocr": "Кэшбэк у партнеров"
+          }
+        },
+        "partners_category_new": {
+          "match": {
+            "click": [
+              895,
+              985
+            ]
+          }
+        },
+        "partners_category_food": {
+          "match": {
+            "click": [
+              976,
+              986
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "gorod",
+      "detect": {
+        "ocr_all": [
+          "Афиша"
+        ],
+        "ocr_any": [
+          "Отслеживание",
+          "Долями Медиа",
+          "Купить авто",
+          "Москва"
+        ]
+      },
+      "text": "Раздел Т-БАНК ГОРОД (/mybank/gorod/, window title 'Т-Банк Город'). Heading = the city selector (e.g. 'Москва', x457-565 y268-289; click to change city). Card grid: 'Путешествия' (Авиабилеты, отели; экскурсии и туры; x478 y348) x~457-750 y~348-445; 'Афиша' (Концерты и Театр) x789 y347; 'Заказы' x1198 y347; 'T-Bank Shop' (Одежда и аксессуары) x477 y509; 'Долями Медиа' (Статьи о покупках) x789 y510; 'Купить авто' x478 y672; 'Отслеживание посылок' (В службах доставки) x789 y672. Footer links y1011: О банке, Новости, Блог, Точки пополнения, Карты, Курсы валют, Контакты, Помощь, Работа, Для инвесторов.",
+      "controls": {
+        "city": {
+          "match": {
+            "click": [
+              511,
+              278
+            ]
+          }
+        },
+        "travel": {
+          "match": {
+            "ocr": "путешествия"
+          }
+        },
+        "afisha": {
+          "match": {
+            "ocr": "Афиша"
+          }
+        },
+        "orders": {
+          "match": {
+            "click": [
+              1221,
+              352
+            ]
+          }
+        },
+        "tbank_shop": {
+          "match": {
+            "ocr": "Shop"
+          }
+        },
+        "dolyame_media": {
+          "match": {
+            "ocr": "долями медиа"
+          }
+        },
+        "buy_auto": {
+          "match": {
+            "ocr": "купить авто"
+          }
+        },
+        "tracking": {
+          "match": {
+            "ocr": "тслеживание"
+          }
+        }
+      }
+    },
+    {
+      "id": "more_settings",
+      "detect": {
+        "ocr_all": [
+          "Установить приложение"
+        ],
+        "ocr_any": [
+          "Банкоматы",
+          "Безопасность",
+          "заказать справку"
+        ]
+      },
+      "text": "Раздел ЕЩЁ (пункт меню 'Ещё' → /mybank/settings/). Heading 'Еще' (x458 y268). LEFT column: currency rates widget (USD 90,20 / EUR 101,65 / GBP 134, y~345); 'Банкоматы и точки пополнения' y424-463; 'Связь с банком' y664 with 8 (800) 555-22-77 (звонки по России) and +7 (495) 645-59-19 (из других стран). MAIN column: search y~345; 'Установить приложение Т-Банка на iPhone' y427-469; 'Безопасность / Пароли и активные сессии' y543-585; 'заказать справку / Об остатке на счете и другие' (x1184 y543); 'настройки / СБП, уведомления о счетах на оплату' y657-721; 'привязки СБП' (x1184 y658); 'Работа в Т-Банке' y794-837.",
+      "controls": {
+        "ios_app": {
+          "match": {
+            "ocr": "Установить приложение"
+          }
+        },
+        "security": {
+          "match": {
+            "ocr": "Безопасность"
+          }
+        },
+        "settings_tile": {
+          "match": {
+            "click": [
+              918,
+              666
+            ]
+          }
+        },
+        "atm_and_topup": {
+          "match": {
+            "ocr": "Банкоматы"
+          }
+        },
+        "support_phones": {
+          "match": {
+            "ocr": "связь с банком"
+          }
+        },
+        "statement": {
+          "match": {
+            "ocr": "заказать справку"
+          }
+        },
+        "work": {
+          "match": {
+            "ocr": "Работа в"
+          }
+        }
+      }
+    },
+    {
+      "id": "account_debit",
+      "detect": {
+        "ocr_all": [
+          "Бонусы по Black"
+        ],
+        "ocr_any": [
+          "округление покупок",
+          "Взять из Кубышки",
+          "операции по счету в сентябре",
+          "Накоплено кашбэка"
+        ]
+      },
+      "text": "Страница СЧЁТА/КАРТЫ (left column of the main page; URL /mybank/accounts/debit/<id>/, reached by clicking a card). '< Назад' (x481 y230) returns to the previous page. LEFT column: card name ('Black') + balance ('3 673,52 ₽', y328-353), round actions 'Перевести' (x678 y504) and 'Пополнить' (x577 y504); banners 'Если добавить Сбербанк в Т-Банк' y580-661, 'В Кубышке 40 000 ₽ … Взять из Кубышки' y731-837, 'Округление покупок … Настроить' y923-1034. MAIN column: 'операции по счету в сентябре >' y476-495, tabs Траты/Пополнения y517, category legend (Переводы 65 131 ₽, Кредиты, Фастфуд, Супермаркеты, Остальное), 'Бонусы по Black' y731-750 with offer tiles + 'Выбрать'. RIGHT column x~1300-1450: cashback widget 'Накоплено кэшбэка / 98 580 ₽ / 11 октября' + donut chart 'Траты'. Below the fold: 'Реквизиты (Номер договора …), QR-код, Ссылка, Детали счета (лимиты), Привязанные сервисы (СБП), Тариф, Выписка по счету / Заказать справку, Защита карт'. 'Перевести'/'Пополнить'/'Взять из Кубышки' are real money operations — confirm with the user first.",
+      "controls": {
+        "back": {
+          "match": {
+            "click": [
+              481,
+              230
+            ]
+          }
+        },
+        "transfer": {
+          "match": {
+            "click": [
+              678,
+              504
+            ]
+          }
+        },
+        "top_up": {
+          "match": {
+            "click": [
+              577,
+              504
+            ]
+          }
+        },
+        "account_operations": {
+          "match": {
+            "ocr": "операции по счету в сентябре"
+          }
+        },
+        "take_from_kubyshka": {
+          "match": {
+            "ocr": "Взять из Кубышки"
+          }
+        },
+        "rounding_setup": {
+          "match": {
+            "ocr": "Настроить"
+          }
+        },
+        "add_card_for_relatives": {
+          "match": {
+            "ocr": "добавить карту для близких"
+          }
+        }
+      }
+    },
+    {
+      "id": "offers_catalog",
+      "detect": {
+        "ocr_all": [
+          "Сервис электронных"
+        ],
+        "ocr_any": [
+          "Кэшбэк",
+          "Скидка",
+          "Осталось",
+          "Петстory",
+          "Petst"
+        ]
+      },
+      "text": "Каталог предложений (/mybank/bonuses/categories/new/, reached from the main page's right-side link 'Все предложения'). Heading = the selected category ('Новые', x458 y268). A 3-column masonry grid of offer cards (columns x~470-750, x~787-1040, x~1105-1370; card rows start y~343, next rows +~240 px). Each card: badge (Скидка NN% / Кэшбэк NN%), brand name (Литрес, Страхование Petstory, Бананы в Городе, Церезит, Райтбуфен, Askona, Royal Canin, EDERRA, Свой отель, ROBUXLAND), short description and an expiry ('Осталось 3 дня', 'До 20 октября', 'Последний день'). Category tabs switch the list. Clicking a card opens that partner offer (activating an offer is a real action — confirm with the user).",
+      "controls": {
+        "offer_1": {
+          "match": {
+            "click": [
+              610,
+              410
+            ]
+          }
+        },
+        "offer_2": {
+          "match": {
+            "click": [
+              913,
+              410
+            ]
+          }
+        },
+        "offer_3": {
+          "match": {
+            "click": [
+              1237,
+              410
+            ]
+          }
+        },
+        "category_tab_new": {
+          "match": {
+            "click": [
+              504,
+              278
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "footprints": {},
+  "guide_synced": {
+    "ids_hash": "ef8ccf589bcd",
+    "states": [
+      "main",
+      "fallback",
+      "operations",
+      "payments",
+      "bonuses",
+      "gorod",
+      "more_settings",
+      "account_debit",
+      "offers_catalog"
+    ],
+    "updated": "2026-09-27"
+  }
+}

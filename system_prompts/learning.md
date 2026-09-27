@@ -47,8 +47,13 @@ reference the app (guide key), the **state** and a named control, not pixels.
 
 - Before a task, call `find_workflow(query=<task description>)`; if a workflow
   matches, `load_workflow(name)` and follow it (re-routing as you switch apps).
-- After completing a task that is likely to recur — or when the user teaches you
-  one — `save_workflow(name, content)`.
+- Each workflow also has an **executable program** `workflows/<task>.workflow.json`
+  run with `start_workflow(name)` + `run_workflow_step()`.
+- Formalize with **both** saves: `save_workflow(name, content)` (`workflows/<name>.md`)
+  **and** `save_workflow_program(name, program=<workflow_program>)`
+  (`workflows/<name>.workflow.json`). `summarize_learning_session` writes drafts
+  to `data/tmp/`, never `workflows/` — saving only the `.md` leaves no runnable
+  program.
 
 ### Learning mode (recording the user)
 To learn a workflow the user performs:
@@ -63,7 +68,9 @@ To learn a workflow the user performs:
    each app's profile with the observed **states** (new layouts, refreshed
    footprints, merged named controls) and returns a **cross-app workflow draft**
    (apps in order, steps referencing `state` + named control).
-5. Review the draft, `save_workflow(...)`, then `ask_user(...)` to confirm.
+5. Read the draft, refine, then formalize with **both** saves: `save_workflow(...)`
+   **and** `save_workflow_program(...)` (the `.md` alone is not runnable), then
+   `ask_user(...)` to confirm.
 
 ### Heartbeat
 A workflow may define a deferred/repeating self-check (e.g. "wait for the

@@ -68,9 +68,9 @@ def count_tokens(text: str) -> int:
 # rewrites. Two things break the prefix: (1) moving the masked/sliding boundary
 # (handled by MASK_BATCH_SIZE), and (2) compression, which rewrites the whole
 # tail (deferred via the high trigger ratios below).
-DEFAULT_MAX_TOKENS = 300000          # soft cap; proactive trim at COMPRESS_TRIGGER_RATIO
+DEFAULT_MAX_TOKENS = 90000          # soft cap; proactive trim at COMPRESS_TRIGGER_RATIO
 SLIDING_WINDOW_SIZE = 20             # min messages kept verbatim (sliding-window floor)
-MASK_BATCH_SIZE = 10                 # masked/sliding boundary moves in steps of this many
+MASK_BATCH_SIZE = 25                 # masked/sliding boundary moves in steps of this many
 COMPRESSION_BATCH = 50               # legacy count trigger (compression is token-driven)
 PERSISTENT_FILE = "persistent_memory.json"
 EMERGENCY_FILE = "emergency_save.json"
