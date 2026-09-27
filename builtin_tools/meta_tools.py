@@ -70,33 +70,44 @@ async def ask_user(question: str, options: list = None, timeout: float = 300.0,
     return json.dumps({"ok": True, "answer": answer}, ensure_ascii=False)
 
 
-async def list_tools(group: str = "") -> str:
-    """List the available tools (name, group, purpose, params) — for discovery.
+async def list_tools(group: str = "", query: str = "") -> str:
+    """List the available tools (name, group, module, purpose, params) — for discovery.
 
-    Call this when you are unsure what is callable. With ``group`` set, only that
-    group's tools. Note: tools are callable even when not in the currently
-    injected schema — this reports everything in the live registry.
+    Call this when you are unsure what is callable. Tools are callable even when
+    not in the currently injected schema — this reports the live registry.
+
+    A ``group`` filter matches both the tool's group **and** its name prefix, so
+    ``group="fs"`` returns every ``fs_*`` tool even though some live in the
+    ``edit`` group (file editing). Use ``query`` to search names/descriptions.
 
     Args:
-        group: optional group name to filter by (e.g. "fs", "workflow").
+        group: optional group name (e.g. "fs", "vision", "workflow").
+        query: optional case-insensitive substring over tool name/description.
     """
     registry = get_registry()
     g = (group or "").strip().lower() or None
+    q = (query or "").strip().lower()
     items = []
     for name in sorted(registry.tool_names):
         tdef = registry.get_tool(name)
-        if tdef is None or (g and tdef.group != g):
+        if tdef is None:
+            continue
+        if g and not (tdef.group == g or name.startswith(g + "_")):
+            continue
+        if q and q not in name.lower() and q not in (tdef.description or "").lower():
             continue
         params = tdef.parameters or {}
         items.append({
             "name": name, "group": tdef.group,
+            "module": (tdef.module_name or "").split(".")[-1],
             "purpose": (tdef.description or "").strip(),
             "params": list((params.get("properties") or {}).keys()),
             "required": params.get("required", []),
             "timeout_s": tdef.timeout,
         })
-    return json.dumps({"ok": True, "group": g or "all", "count": len(items),
-                       "groups": registry.groups(), "tools": items}, ensure_ascii=False)
+    return json.dumps({"ok": True, "group": g or "all", "query": q or None,
+                       "count": len(items), "groups": registry.groups(),
+                       "tools": items}, ensure_ascii=False)
 
 
 async def enable_tools(groups: list = None) -> str:
@@ -165,12 +176,14 @@ TOOL_DEFINITIONS = [
         },
         "required": ["question"],
     }),
-    ("list_tools", list_tools, "List the available tools (name, group, purpose, "
-     "params) for discovery — optionally filtered by group. Tools are callable "
-     "even when not in the injected schema; this lists the whole registry.", {
+    ("list_tools", list_tools, "List the available tools (name, group, module, "
+     "purpose, params) for discovery. Filter by group (also matches name prefix, "
+     "so group='fs' includes the fs_* edit tools) or by a name/description query. "
+     "Tools are callable even when not in the injected schema.", {
         "type": "object",
         "properties": {
-            "group": {"type": "string", "description": "Optional group to filter by (e.g. fs, workflow)"},
+            "group": {"type": "string", "description": "Optional group (e.g. fs, vision, workflow); also matches name prefixes"},
+            "query": {"type": "string", "description": "Optional substring over tool name/description"},
         },
         "required": [],
     }),

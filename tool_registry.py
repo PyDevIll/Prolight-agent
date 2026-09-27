@@ -146,6 +146,23 @@ class ToolRegistry:
         tdef = self._tools.get(name)
         return tdef.group if tdef else None
 
+    @staticmethod
+    def _normalize_args(tdef: "ToolDef", kwargs: dict) -> dict:
+        """Accept ``path``/``file`` as aliases for whichever the tool declares.
+
+        The agent often guesses the wrong one (e.g. ``fs_write_file(path=…)`` when
+        the parameter is ``file``). None of the current tools declare both, so a
+        one-way alias is unambiguous (DEVELOPER_REQUEST #2).
+        """
+        props = (tdef.parameters or {}).get("properties") or {}
+        if "file" in props and "path" not in props and "file" not in kwargs and "path" in kwargs:
+            kwargs = dict(kwargs)
+            kwargs["file"] = kwargs.pop("path")
+        elif "path" in props and "file" not in props and "path" not in kwargs and "file" in kwargs:
+            kwargs = dict(kwargs)
+            kwargs["path"] = kwargs.pop("file")
+        return kwargs
+
     async def call_tool(self, tool_name: str, **kwargs: Any) -> str:
         tdef = self._tools.get(tool_name)
         if not tdef:
@@ -155,6 +172,7 @@ class ToolRegistry:
         if not tdef:
             return f"Error: tool '{tool_name}' not found"
         try:
+            kwargs = self._normalize_args(tdef, kwargs)
             result = await tdef.func(**kwargs)
             return str(result)
         except Exception as e:
