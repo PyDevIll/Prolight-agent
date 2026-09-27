@@ -163,6 +163,22 @@ class ToolRegistry:
             kwargs["path"] = kwargs.pop("file")
         return kwargs
 
+    @staticmethod
+    def _known_params(tdef: "ToolDef") -> Optional[set]:
+        """Parameter names the tool accepts (None when it has **kwargs)."""
+        try:
+            sig = inspect.signature(tdef.func)
+        except (TypeError, ValueError):
+            return None
+        names: set = set()
+        for p in sig.parameters.values():
+            if p.kind == inspect.Parameter.VAR_KEYWORD:
+                return None
+            if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                          inspect.Parameter.KEYWORD_ONLY):
+                names.add(p.name)
+        return names
+
     async def call_tool(self, tool_name: str, **kwargs: Any) -> str:
         tdef = self._tools.get(tool_name)
         if not tdef:
@@ -173,6 +189,13 @@ class ToolRegistry:
             return f"Error: tool '{tool_name}' not found"
         try:
             kwargs = self._normalize_args(tdef, kwargs)
+            known = self._known_params(tdef)
+            if known is not None:
+                unknown = sorted(k for k in kwargs if k not in known)
+                if unknown:
+                    logger.warning(f"Tool '{tool_name}': unknown parameter(s) {unknown}")
+                    return (f"Error: tool '{tool_name}' got unknown parameter(s) {unknown}. "
+                            f"Valid parameters: {sorted(known)}")
             result = await tdef.func(**kwargs)
             return str(result)
         except Exception as e:

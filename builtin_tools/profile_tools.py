@@ -102,9 +102,13 @@ def _unique_state_id(prof: dict) -> str:
 def _merge_delta(prof: dict, *, add_state=None, patch_state=None, remove_state=None,
                  patch_trigger=None, set_initial_text=None) -> tuple:
     """Apply typed deltas to ``prof`` in place. Returns ``(diff, error)`` (R23)."""
-    prof.setdefault("trigger", {})
-    prof.setdefault("states", [])
-    prof.setdefault("footprints", {})
+    if not isinstance(prof.get("trigger"), dict):
+        prof["trigger"] = {}
+    if not isinstance(prof.get("states"), list):
+        prof["states"] = []
+    prof["states"] = [s for s in prof["states"] if isinstance(s, dict)]
+    if not isinstance(prof.get("footprints"), dict):
+        prof["footprints"] = {}
 
     trigger_changed: list = []
     if patch_trigger:
@@ -197,18 +201,31 @@ async def save_app_profile(name: str, profile: str = "", profile_json: str = "",
             try:
                 data = json.loads(data)
             except Exception as e:
-                return _dump({"ok": False, "error": f"invalid JSON: {e}"})
+                return _dump({"ok": False, "error": f"invalid JSON: {e}",
+                              "hint": "remove any leaked diff/patch lines (e.g. '++ path') "
+                                      "or rebuild the profile and pass it as JSON"})
         if not isinstance(data, dict):
             return _dump({"ok": False, "error": "profile must be a JSON object"})
+        problems = profiles.validate(data)
+        structural = profiles.structural_problems(problems)
+        if structural:
+            return _dump({"ok": False, "error": "refusing to save malformed profile",
+                          "problems": problems, "structural": structural,
+                          "hint": "states must be a list of objects, each with an 'id'"})
         data.setdefault("key", learning_db.normalize_key(name))
         path = profiles.save(name, data)
         return _dump({"ok": True, "mode": "replace", "key": data["key"], "path": str(path),
-                      "version": data.get("version"), "problems": profiles.validate(data)})
+                      "version": data.get("version"), "problems": problems})
 
     # Delta mode
-    prof = profiles.load(name)
+    prof, err = profiles.load_with_error(name)
     if prof is None:
-        return _dump({"ok": False, "error": f"no profile {name!r} — pass 'profile' to create it"})
+        return _dump({"ok": False, "error": f"no usable profile {name!r}: {err}",
+                      "hint": "pass 'profile' to create it, or fix the JSON syntax"})
+    structural = profiles.structural_problems(profiles.validate(prof))
+    if structural:
+        return _dump({"ok": False, "error": "profile is malformed — deltas refused",
+                      "structural": structural})
     diff, err = _merge_delta(prof, add_state=add_state, patch_state=patch_state,
                              remove_state=remove_state, patch_trigger=patch_trigger,
                              set_initial_text=set_initial_text)
@@ -382,14 +399,18 @@ async def validate_profile(name: str = "") -> str:
         name: profile key to validate (default: all profiles).
     """
     if name:
-        prof = profiles.load(name)
+        prof, err = profiles.load_with_error(name)
         if prof is None:
-            return _dump({"ok": False, "error": f"no profile {name!r}",
+            return _dump({"ok": False, "error": f"profile {name!r}: {err}",
+                          "hint": ("the file is not valid JSON — repair it (fix the syntax) or "
+                                   "recreate it with save_app_profile(profile=…); a leaked diff "
+                                   "line (e.g. '++ path') inside the file is a common cause"
+                                   if err and err.startswith("invalid") else None),
                           "available": [p["key"] for p in profiles.list_profiles()]})
         out = {"ok": True, "key": prof.get("key") or learning_db.normalize_key(name),
                "problems": profiles.validate(prof),
                "guide_stale": profiles.guide_stale(prof),
-               "states": [s.get("id") for s in prof.get("states") or []]}
+               "states": [s.get("id") for s in (prof.get("states") or []) if isinstance(s, dict)]}
         from lib import window_state
         st = window_state.get()
         if st is not None and st.window:
@@ -407,9 +428,9 @@ async def validate_profile(name: str = "") -> str:
         return _dump(out)
     out = []
     for item in profiles.list_profiles():
-        prof = profiles.load(item["key"])
-        out.append({"key": item["key"],
-                    "problems": profiles.validate(prof) if prof else ["unreadable"]})
+        prof, err = profiles.load_with_error(item["key"])
+        out.append({"key": item["key"], "error": err,
+                    "problems": profiles.validate(prof) if prof else [err or "unreadable"]})
     return _dump({"ok": True, "profiles": out})
 
 

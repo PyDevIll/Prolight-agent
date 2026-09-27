@@ -53,6 +53,35 @@ def load(key: str) -> Optional[dict]:
         return None
 
 
+def load_with_error(key: str) -> tuple[Optional[dict], Optional[str]]:
+    """Like :func:`load` but returns ``(profile, error)``.
+
+    ``error`` distinguishes "missing" from "invalid JSON" (a hand-edited file),
+    and only a dict is returned (a valid-JSON scalar is reported as malformed).
+    """
+    p = profile_path(key)
+    if not p.exists():
+        return None, "missing"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        return None, f"invalid JSON: {e}"
+    if not isinstance(data, dict):
+        return None, "profile must be a JSON object"
+    return data, None
+
+
+def structural_problems(problems: list) -> list:
+    """The subset of ``validate`` problems that make a profile unusable.
+
+    Used to refuse writing a malformed profile (so a bad edit can never replace a
+    good file); informational warnings such as the ``url_contains`` note are not
+    structural.
+    """
+    prefixes = ("states must", "state[", "trigger must", "profile must")
+    return [p for p in problems if str(p).startswith(prefixes)]
+
+
 def save(key: str, data: dict) -> Path:
     learning_db.ensure_dirs()
     data = dict(data or {})
@@ -120,7 +149,8 @@ def validate(data: dict) -> list[str]:
 
 def states_hash(profile: dict) -> str:
     """Stable hash of the profile's state id set (for guide-sync checks)."""
-    ids = [s.get("id") for s in profile.get("states") or []]
+    states = profile.get("states") if isinstance(profile, dict) else None
+    ids = [s.get("id") for s in states or [] if isinstance(s, dict)]
     return hashlib.sha1(",".join(sorted(i for i in ids if i)).encode("utf-8")).hexdigest()[:12]
 
 
@@ -130,8 +160,8 @@ def guide_stale(profile: dict) -> bool:
     Only meaningful once a profile has been synced (``guide_synced`` present);
     hand-authored profiles without that marker are never reported stale.
     """
-    gs = profile.get("guide_synced")
-    if not gs:
+    gs = profile.get("guide_synced") if isinstance(profile, dict) else None
+    if not isinstance(gs, dict):
         return False
     return gs.get("ids_hash") != states_hash(profile)
 
@@ -141,15 +171,29 @@ def shadowed_rules(profile: dict) -> list[dict]:
 
     Such a pair makes the broader state shadow the more specific one at route
     time (R14). Returns ``[{'broad', 'specific', 'broad_rule', 'specific_rule'}]``.
+    Tolerates malformed shapes (a hand-edited ``states`` that is not a list of
+    objects) so validation never crashes.
     """
     def norm(s: str) -> str:
         return " ".join((s or "").split()).strip().lower()
 
+    states = profile.get("states") if isinstance(profile, dict) else None
+    if not isinstance(states, list):
+        return []
     entries: list[tuple] = []
-    for st in profile.get("states") or []:
+    for st in states:
+        if not isinstance(st, dict):
+            continue
         det = st.get("detect") or {}
+        if not isinstance(det, dict):
+            continue
         for key in ("uia_all", "uia_any"):
-            for r in det.get(key) or []:
+            rules = det.get(key) or []
+            if not isinstance(rules, list):
+                continue
+            for r in rules:
+                if not isinstance(r, dict):
+                    continue
                 s = norm(r.get("name") or r.get("automation_id") or "")
                 if s:
                     entries.append((st.get("id"), s))

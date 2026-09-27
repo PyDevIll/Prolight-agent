@@ -195,6 +195,8 @@ async def fs_grep(
     case_sensitive: bool = False,
     max_size: int = 10_000_000,
     force_text: bool = False,
+    context: int = 0,
+    lines: int = 0,
 ) -> str:
     """
     Recursive text search with advanced options. Skips binary/large files by default.
@@ -206,12 +208,16 @@ async def fs_grep(
         max_files: Maximum number of files to scan (default: 500).
         regex: If True, treat pattern as a regular expression.
         case_sensitive: If True, perform case-sensitive search.
-        max_size: Maximum file size in bytes to read (0 = unlimited, default: 10MB, было 1мб).
+        max_size: Maximum file size in bytes to read (0 = unlimited, default: 10MB).
         force_text: If True, skip binary detection and read the file as text.
+        context: number of surrounding lines to show around each match (default 0).
+        lines: alias for ``context`` (accepted for convenience; the larger wins).
 
     Returns:
         String with matching lines (file:line:content) or error/summary.
     """
+    ctx = max(int(context or 0), int(lines or 0), 0)
+    ctx = min(ctx, 20)
     p = _safe_path(path)
     if not p.exists():
         return f"Path not found: {path}"
@@ -219,7 +225,7 @@ async def fs_grep(
     # ── Single‑file mode ────────────────────────────────────────────────
     if p.is_file():
         return await _grep_single_file(
-            p, pattern, regex, case_sensitive, max_size, force_text
+            p, pattern, regex, case_sensitive, max_size, force_text, ctx
         )
 
     # ── Directory scan ──────────────────────────────────────────────────
@@ -252,39 +258,39 @@ async def fs_grep(
     # Process each file (non‑blocking with thread pool)
     def search_file(fp: Path) -> tuple:
         local_matches: list[str] = []
-        bytes_read = 0
         try:
             fsize = fp.stat().st_size
         except OSError:
-            return local_matches, bytes_read
-
-        # Size check
+            return local_matches, 0
         if max_size and fsize > max_size:
-            return local_matches, bytes_read  # counted by caller
-
-        # Binary detection (unless forced)
+            return local_matches, 0          # counted by caller
         if not force_text and _is_binary(str(fp)):
-            return local_matches, bytes_read  # counted by caller
-
-        # Stream line by line to avoid memory blow
+            return local_matches, 0          # counted by caller
+        bytes_read = fsize
+        # Read once (files are already size-capped above) so we can show context.
         try:
             with open(fp, 'r', encoding='utf-8', errors='replace') as f:
-                for lineno, line in enumerate(f, 1):
-                    bytes_read += len(line)
-                    line = line.rstrip('\n')
-                    if regex:
-                        if pat.search(line):
-                            local_matches.append(f"{fp}:{lineno}:{line}")
-                    else:
-                        needle = pattern if case_sensitive else pattern_lower
-                        haystack = line if case_sensitive else line.lower()
-                        if needle in haystack:
-                            local_matches.append(f"{fp}:{lineno}:{line}")
-                    if len(local_matches) >= MAX_MATCHES:
-                        break
+                all_lines = f.readlines()
         except (UnicodeDecodeError, PermissionError, OSError):
-            # If we can't read, treat as binary / inaccessible
-            pass
+            return local_matches, bytes_read
+        for idx, raw in enumerate(all_lines):
+            line = raw.rstrip('\n')
+            if regex:
+                hit = bool(pat.search(line))
+            else:
+                needle = pattern if case_sensitive else pattern_lower
+                hit = needle in (line if case_sensitive else line.lower())
+            if not hit:
+                continue
+            if ctx:
+                lo = max(0, idx - ctx)
+                hi = min(len(all_lines), idx + ctx + 1)
+                local_matches.append("\n".join(
+                    f"{fp}:{j + 1}:{all_lines[j].rstrip(chr(10))}" for j in range(lo, hi)))
+            else:
+                local_matches.append(f"{fp}:{idx + 1}:{line}")
+            if len(local_matches) >= MAX_MATCHES:
+                break
         return local_matches, bytes_read
 
     loop = asyncio.get_running_loop()
@@ -355,6 +361,7 @@ async def _grep_single_file(
     case_sensitive: bool,
     max_size: int,
     force_text: bool,
+    ctx: int = 0,
 ) -> str:
     """Search a single file with the same options."""
     try:
@@ -383,19 +390,26 @@ async def _grep_single_file(
     MAX_MATCHES = 100
     try:
         with open(fp, 'r', encoding='utf-8', errors='replace') as f:
-            for lineno, line in enumerate(f, 1):
-                scanned += len(line)
-                line = line.rstrip('\n')
-                if regex:
-                    if pat.search(line):
-                        matches.append(f"{fp}:{lineno}:{line}")
-                else:
-                    needle = pattern if case_sensitive else pattern.lower()
-                    haystack = line if case_sensitive else line.lower()
-                    if needle in haystack:
-                        matches.append(f"{fp}:{lineno}:{line}")
-                if len(matches) >= MAX_MATCHES:
-                    break
+            all_lines = f.readlines()
+        scanned = fsize
+        for idx, raw in enumerate(all_lines):
+            line = raw.rstrip('\n')
+            if regex:
+                hit = bool(pat.search(line))
+            else:
+                needle = pattern if case_sensitive else pattern.lower()
+                hit = needle in (line if case_sensitive else line.lower())
+            if not hit:
+                continue
+            if ctx:
+                lo = max(0, idx - ctx)
+                hi = min(len(all_lines), idx + ctx + 1)
+                matches.append("\n".join(
+                    f"{fp}:{j + 1}:{all_lines[j].rstrip(chr(10))}" for j in range(lo, hi)))
+            else:
+                matches.append(f"{fp}:{idx + 1}:{line}")
+            if len(matches) >= MAX_MATCHES:
+                break
     except UnicodeDecodeError as e:
         return f"Encoding error reading {fp}: {e}. Try force_text=True."
     except Exception as e:
@@ -712,6 +726,8 @@ TOOL_DEFINITIONS = [
             "case_sensitive": {"type": "boolean", "description": "Case‑sensitive search (default: false)"},
             "max_size": {"type": "integer", "description": "Max file size in bytes (0 = unlimited, default: 1MB)"},
             "force_text": {"type": "boolean", "description": "Skip binary detection (default: false)"},
+            "context": {"type": "integer", "description": "Show N lines around each match (default 0)"},
+            "lines": {"type": "integer", "description": "Alias for 'context' (N lines around each match)"},
         },
         "required": ["pattern"],
     }),
