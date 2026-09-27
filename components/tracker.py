@@ -530,8 +530,43 @@ def stop() -> dict:
 
 def status() -> dict:
     if not is_active():
-        return {"ok": True, "active": False}
+        return {"ok": True, "active": False, "last": last_summary() or None}
     return {
         "ok": True, "active": True, "label": _session["label"], "dir": str(_session["dir"]),
         "events": _session["events"], "clicks": _session["clicks"], "states": _session["states"],
+    }
+
+
+def last_summary() -> dict:
+    """Summary of the most recent session on disk (or ``{}``).
+
+    Lets the agent tell "the user already stopped it" from "never started" — the
+    recording is gone from memory, but its files are still there.
+    """
+    d = latest()
+    if not d:
+        return {}
+    p = Path(d)
+    events = states = clicks = 0
+    ep = p / "events.jsonl"
+    if ep.exists():
+        for line in ep.read_text(encoding="utf-8", errors="replace").splitlines():
+            if '"kind": "click"' in line or '"kind":"click"' in line:
+                clicks += 1
+            if line.strip():
+                events += 1
+    sp = p / "states.jsonl"
+    if sp.exists():
+        states = sum(1 for ln in sp.read_text(encoding="utf-8", errors="replace").splitlines() if ln.strip())
+    apps: list = []
+    tp = p / "app_timeline.json"
+    if tp.exists():
+        try:
+            apps = [s.get("guide_key") for s in json.loads(tp.read_text(encoding="utf-8"))]
+        except Exception:
+            apps = []
+    return {
+        "dir": str(p), "label": p.name, "events": events, "clicks": clicks, "states": states,
+        "apps": apps,
+        "modified": datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds"),
     }

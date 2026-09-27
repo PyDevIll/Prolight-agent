@@ -111,9 +111,37 @@ async def start_learning_session(label: str = "") -> str:
 
 
 async def stop_learning_session() -> str:
-    """Stop the recording and return the session summary (events, states, apps)."""
+    """Stop the recording and return the session summary (events, states, apps).
+
+    If a recording is no longer active (e.g. the user already typed ``/learn
+    stop``), returns ``already_stopped: true`` plus the most recent session on
+    disk instead of a bare error.
+    """
     result = tracker.stop()
+    if not result.get("ok"):
+        last = tracker.last_summary()
+        if last:
+            return _dump({
+                "ok": False, "already_stopped": True,
+                "error": "no active learning session",
+                "last": last,
+                "hint": "the recording was already stopped (e.g. via /learn stop); "
+                        "its files are under last.dir — summarize them.",
+            })
     return _dump(result)
+
+
+async def learning_status() -> str:
+    """Report whether a learning session is recording (and the last one on disk).
+
+    Use it before/after a recording to tell "active", "the user already stopped
+    it" and "never started" apart.
+    """
+    st = tracker.status()
+    if not st.get("active"):
+        st["last"] = tracker.last_summary() or None
+        st.setdefault("hint", "no active recording; the most recent session (if any) is in 'last'.")
+    return _dump(st)
 
 
 async def summarize_learning_session(session_dir: str = "", label: str = "", save: bool = True) -> str:
@@ -253,7 +281,15 @@ TOOL_DEFINITIONS = [
         "stop_learning_session",
         stop_learning_session,
         "Stop the learning recording and return the session summary (events, "
-        "settled states, app segments) so you can summarize it into a workflow.",
+        "settled states, app segments) so you can summarize it into a workflow. "
+        "Returns already_stopped:true + the last session if none is active.",
+        {"type": "object", "properties": {}, "required": []},
+    ),
+    (
+        "learning_status",
+        learning_status,
+        "Report whether a learning session is recording; when not, returns the "
+        "most recent session on disk (dir, counts, apps) and its timestamp.",
         {"type": "object", "properties": {}, "required": []},
     ),
     (

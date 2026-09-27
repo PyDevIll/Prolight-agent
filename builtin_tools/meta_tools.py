@@ -66,6 +66,35 @@ async def ask_user(question: str, options: list = None, timeout: float = 300.0,
     return json.dumps({"ok": True, "answer": answer}, ensure_ascii=False)
 
 
+async def list_tools(group: str = "") -> str:
+    """List the available tools (name, group, purpose, params) — for discovery.
+
+    Call this when you are unsure what is callable. With ``group`` set, only that
+    group's tools. Note: tools are callable even when not in the currently
+    injected schema — this reports everything in the live registry.
+
+    Args:
+        group: optional group name to filter by (e.g. "fs", "workflow").
+    """
+    registry = get_registry()
+    g = (group or "").strip().lower() or None
+    items = []
+    for name in sorted(registry.tool_names):
+        tdef = registry.get_tool(name)
+        if tdef is None or (g and tdef.group != g):
+            continue
+        params = tdef.parameters or {}
+        items.append({
+            "name": name, "group": tdef.group,
+            "purpose": (tdef.description or "").strip(),
+            "params": list((params.get("properties") or {}).keys()),
+            "required": params.get("required", []),
+            "timeout_s": tdef.timeout,
+        })
+    return json.dumps({"ok": True, "group": g or "all", "count": len(items),
+                       "groups": registry.groups(), "tools": items}, ensure_ascii=False)
+
+
 async def enable_tools(groups: list = None) -> str:
     """Unlock additional tool groups for the rest of this run.
 
@@ -74,8 +103,8 @@ async def enable_tools(groups: list = None) -> str:
     extra tools become callable on your next step.
 
     Args:
-        groups: group names to enable. Valid: perception, uia, vision, locate,
-            probe, mouse, keybd, learning, overlay, fs, edit.
+        groups: group names to enable. Call ``list_tools()`` to see the valid
+            groups (also returned as ``valid_groups``).
     """
     from app import get_agent
     from lib import instruction_planner as ip
@@ -131,6 +160,15 @@ TOOL_DEFINITIONS = [
         },
         "required": ["question"],
     }),
+    ("list_tools", list_tools, "List the available tools (name, group, purpose, "
+     "params) for discovery — optionally filtered by group. Tools are callable "
+     "even when not in the injected schema; this lists the whole registry.", {
+        "type": "object",
+        "properties": {
+            "group": {"type": "string", "description": "Optional group to filter by (e.g. fs, workflow)"},
+        },
+        "required": [],
+    }),
     ("enable_tools", enable_tools, "Unlock additional tool groups for the rest of "
      "this run if the currently available tools are not enough.", {
         "type": "object",
@@ -156,7 +194,14 @@ GROUP = "meta"
 
 
 def register_all(registry):
+    from lib import instruction_planner as ip
+    import copy
+    groups = ", ".join(ip.ALL_GROUPS)
     for name, func, desc, params in TOOL_DEFINITIONS:
+        if name == "enable_tools":
+            desc = f"Unlock additional tool groups for the rest of this run. Valid groups: {groups}."
+            params = copy.deepcopy(params)
+            params["properties"]["groups"]["description"] = f"Groups to enable. Valid: {groups}"
         registry.register_function(func, name, desc, params, group=GROUP)
     # ask_user blocks on a human; give it a longer cap than the 120s default
     # so its documented 300s timeout is actually honoured.
